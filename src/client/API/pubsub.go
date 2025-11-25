@@ -157,7 +157,7 @@ func RequestFindMatch(nc *nats.Conn, id int) (string, error) {
 		var natsPayload NatsMessage
 		json.Unmarshal(msg.Data, &natsPayload)
 		if natsPayload.ClientID != id {
-			fmt.Println("NOTT")
+			fmt.Println("NOTT", natsPayload.ClientID)
 			return
 		}
 		if natsPayload.Err != nil {

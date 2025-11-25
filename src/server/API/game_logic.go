@@ -120,7 +120,7 @@ func (s *Store) OpenPack(id int) (*[3]int, error) {
 	}
 	player.Cards = append(player.Cards, pack[0], pack[1], pack[2]) 
 	s.players[id] = player
-	
+	fmt.Println(player.Cards)
 	fmt.Println("[Central] Pack opened for player", id, pack)
 	return &pack, nil
 }

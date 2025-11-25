@@ -23,18 +23,18 @@ func SetupPS(s *Store) {
 	go func() {
 		for {
 			htb := map[string]int64{"server_ping": time.Now().UnixMilli()}
-			htb_json,_ := json.Marshal(htb)
+			htb_json, _ := json.Marshal(htb)
 			nc.Publish("topic.heartbeat", htb_json)
 		}
 	}()
 
-    ReplyPing(nc) 
+	ReplyPing(nc)
 	CreateAccount(nc, s)
 	ClientLogin(nc, s)
 	ClientOpenPack(nc, s)
-	ClientSeeCards(nc, s)     
+	ClientSeeCards(nc, s)
 	ClientJoinGameQueue(nc, s)
-	ClientPlayCards(nc, s)    
+	ClientPlayCards(nc, s)
 }
 
 func ReplyPing(nc *nats.Conn) {
@@ -138,14 +138,13 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 		s.mu.Lock()
 		player, exists := s.players[clientID]
 		s.mu.Unlock()
-
 		if !exists {
 			nc.Publish(m.Reply, []byte(`{"err":"player not found"}`))
 			return
 		}
 
 		resp := map[string]any{
-			"cards":     player.Cards,
+			"result":    player.Cards,
 			"is_leader": true,
 		}
 		data, _ := json.Marshal(resp)
@@ -167,7 +166,7 @@ func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 		respPayload := map[string]any{"status": "Added to queue", "is_leader": true}
 		data, _ := json.Marshal(respPayload)
 		nc.Publish(m.Reply, data)
-		
+
 		match, err := s.CreateMatch()
 		if err != nil {
 			fmt.Println("Match not started.")
@@ -175,7 +174,16 @@ func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 		}
 
 		fmt.Println("Match started:", match.SelfId)
-		
+		for _, p := range []int{match.P1, match.P2} {
+			resp := map[string]any{
+				"client_id": p,
+				"match":     match,
+			}
+			fmt.Println(resp)
+			data, _ = json.Marshal(resp)
+			nc.Publish("topic.matchmaking", data)
+		}
+
 	})
 }
 
@@ -187,8 +195,6 @@ func SendingMatch(payload map[string]any) {
 		fmt.Println("Result sent:", payload)
 	}
 }
-
-
 
 // Função auxiliar para enviar resultados (era chamada mas não existia)
 func SendingGameResult(payload map[string]any) {
@@ -232,7 +238,7 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 
 		// Se ambos jogaram, calcula o resultado
 		if match.Card1 != 0 && match.Card2 != 0 {
-			
+
 			// --- CORREÇÃO AQUI: Declarando separadamente para evitar erro ---
 			var response1 map[string]any
 			var response2 map[string]any
