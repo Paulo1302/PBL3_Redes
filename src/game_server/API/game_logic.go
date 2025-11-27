@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 )
 
 type IdManager struct{
@@ -33,6 +35,7 @@ type TradeQueue struct{
 
 type Player struct{
     Id int
+	Wallet string
     Cards []int
 }
 
@@ -79,13 +82,14 @@ func setupPacks(N int) [][3]int {
 
 // --- LÓGICA CENTRALIZADA ---
 
-func (s *Store) CreatePlayer() (int, error) {
+func (s *Store) CreatePlayer(nc *nats.Conn) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
 	s.count += 1
 	newPlayer := Player{
 		Id:    s.count,
+		Wallet: RequestCreateWallet(nc),
 		Cards: nil, // ou inicializar vazio
 	}
 	

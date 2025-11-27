@@ -10,6 +10,11 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+type WalletResponse struct {
+	ClientID string `json:"msg"`
+	Err      bool   `json:"ok"`
+}
+
 var myConnection *nats.Conn
 
 func SetupPS(s *Store) {
@@ -35,6 +40,9 @@ func SetupPS(s *Store) {
 	ClientSeeCards(nc, s)
 	ClientJoinGameQueue(nc, s)
 	ClientPlayCards(nc, s)
+	for i := 0; i < 10; i++ {
+		RequestCreateWallet(nc)
+	}
 }
 
 func ReplyPing(nc *nats.Conn) {
@@ -66,7 +74,7 @@ func BrokerConnect() (*nats.Conn, error) {
 
 func CreateAccount(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.createAccount", func(m *nats.Msg) {
-		playerID, err := s.CreatePlayer()
+		playerID, err := s.CreatePlayer(nc)
 		if err != nil {
 			nc.Publish(m.Reply, []byte(`{"err":"ERROR_CREATING"}`))
 			return
@@ -150,6 +158,22 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 		data, _ := json.Marshal(resp)
 		nc.Publish(m.Reply, data)
 	})
+}
+
+func RequestCreateWallet(nc *nats.Conn) string {
+	test := map[string]any{
+			"result":    "oiii",
+			"is_leader": true,
+		}
+	data, _ := json.Marshal(test)
+	response, err := nc.Request("internalServer.wallet", data, 10 * time.Second)
+	if err != nil {
+		fmt.Println(err.Error())
+		return ""
+	}
+	msg := WalletResponse{}
+	json.Unmarshal(response.Data, &msg)
+	return msg.ClientID
 }
 
 func ClientJoinGameQueue(nc *nats.Conn, s *Store) {

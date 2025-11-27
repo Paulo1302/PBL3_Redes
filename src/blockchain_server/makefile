@@ -7,6 +7,7 @@ help:
 
 install-dependencies:
 	@npm install @iota/iota-sdk
+	@npm install nats
 
 run-tsc:
 	@npx tsx index.ts
