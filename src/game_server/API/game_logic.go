@@ -90,10 +90,12 @@ func (s *Store) CreatePlayer(nc *nats.Conn) (int, error) {
 	newPlayer := Player{
 		Id:    s.count,
 		Wallet: RequestCreateWallet(nc),
-		Cards: nil, // ou inicializar vazio
+		Cards: nil,
 	}
 	
-	// Lógica que antes estava no Apply:
+	//DEBUG
+	fmt.Println("IDK:", RequestFaucet(nc, newPlayer.Wallet))
+
 	s.players[newPlayer.Id] = newPlayer
 	fmt.Printf("[Central] Player Created: %d\n", newPlayer.Id)
 

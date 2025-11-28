@@ -10,20 +10,12 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-type WalletResponse struct {
-	ClientID string `json:"msg"`
-	Err      bool   `json:"ok"`
-}
-
-var myConnection *nats.Conn
-
 func SetupPS(s *Store) {
 	nc, err := BrokerConnect()
 	if err != nil {
 		log.Println("NATS Connect Error:", err)
 		return
 	}
-	myConnection = nc
 
 	go func() {
 		for {
@@ -40,8 +32,13 @@ func SetupPS(s *Store) {
 	ClientSeeCards(nc, s)
 	ClientJoinGameQueue(nc, s)
 	ClientPlayCards(nc, s)
-	for i := 0; i < 10; i++ {
-		RequestCreateWallet(nc)
+	
+	//DEBUG
+	// for range 10 {
+	// 	fmt.Println(RequestCreateWallet(nc))
+	// }
+	for range 10 {
+		nc.Request("topic.createAccount", nil, 30*time.Second)
 	}
 }
 
@@ -75,6 +72,7 @@ func BrokerConnect() (*nats.Conn, error) {
 func CreateAccount(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.createAccount", func(m *nats.Msg) {
 		playerID, err := s.CreatePlayer(nc)
+		
 		if err != nil {
 			nc.Publish(m.Reply, []byte(`{"err":"ERROR_CREATING"}`))
 			return
@@ -86,6 +84,7 @@ func CreateAccount(nc *nats.Conn, s *Store) {
 		}
 		data, _ := json.Marshal(payload)
 		nc.Publish(m.Reply, data)
+		fmt.Println("user id: ",playerID)
 	})
 }
 
@@ -160,21 +159,7 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 	})
 }
 
-func RequestCreateWallet(nc *nats.Conn) string {
-	test := map[string]any{
-			"result":    "oiii",
-			"is_leader": true,
-		}
-	data, _ := json.Marshal(test)
-	response, err := nc.Request("internalServer.wallet", data, 10 * time.Second)
-	if err != nil {
-		fmt.Println(err.Error())
-		return ""
-	}
-	msg := WalletResponse{}
-	json.Unmarshal(response.Data, &msg)
-	return msg.ClientID
-}
+
 
 func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.findMatch", func(m *nats.Msg) {
@@ -211,21 +196,12 @@ func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 	})
 }
 
-func SendingMatch(payload map[string]any) {
-	data, _ := json.Marshal(payload)
-	if myConnection != nil {
-		// Publica no tópico que os clientes estão escutando (ex: game.server)
-		myConnection.Publish("game.server", data)
-		fmt.Println("Result sent:", payload)
-	}
-}
-
 // Função auxiliar para enviar resultados (era chamada mas não existia)
-func SendingGameResult(payload map[string]any) {
+func SendingGameResult(payload map[string]any, nc *nats.Conn) {
 	data, _ := json.Marshal(payload)
-	if myConnection != nil {
+	if nc != nil {
 		// Publica no tópico que os clientes estão escutando (ex: game.server)
-		myConnection.Publish("game.server", data)
+		nc.Publish("game.server", data)
 		fmt.Println("Result sent:", payload)
 	}
 }
@@ -292,8 +268,8 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 				}
 			}
 
-			SendingGameResult(response1)
-			SendingGameResult(response2)
+			SendingGameResult(response1, nc)
+			SendingGameResult(response2, nc)
 		}
 	})
 }

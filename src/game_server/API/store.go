@@ -1,10 +1,7 @@
 package API
 
-import (
-	"sync"
-)
+import "sync"
 
-// Store agora é apenas um container de estado em memória
 type Store struct {
 	mu           sync.Mutex
 	players      map[int]Player
@@ -15,7 +12,6 @@ type Store struct {
 	NodeID       string 
 }
 
-// NewStore cria uma nova instância inicializada
 func NewStore() *Store {
 	return &Store{
 		players:      make(map[int]Player),
@@ -26,6 +22,3 @@ func NewStore() *Store {
 		NodeID:       "server-central",
 	}
 }
-
-// Removemos Apply, Snapshot, Restore e GetMembers
-// Mantemos apenas a estrutura de dados.

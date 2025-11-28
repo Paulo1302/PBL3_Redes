@@ -1,28 +1,42 @@
 package API
 
 import (
-	"net/http"
-	"github.com/gin-gonic/gin"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
-// setupRouter limpo
-func SetupRouter(s *Store) *gin.Engine {
-	r := gin.Default()
+type IotaRequest struct {
+	ClientID 		string 	`json:"client"`
+	SecondClientID 	string 	`json:"aux_client"`
+	Ok     			bool   	`json:"ok"`
+	IotaValue		uint64	`json:"price"`	
+}
 
-    // Apenas rotas úteis para debug ou clientes HTTP legados
-	r.GET("/status", func(c *gin.Context) {
-        s.mu.Lock()
-        defer s.mu.Unlock()
-		c.JSON(http.StatusOK, gin.H{
-            "node_id": s.NodeID,
-            "players_online": len(s.players),
-            "matches": len(s.matchHistory),
-            "queue": len(s.gameQueue),
-        })
-	})
 
-    // Se você usar HTTP para jogar cartas (além do NATS), mantenha os handlers,
-    // mas aponte diretamente para as funções do store, sem forward.
-    
-	return r
+func RequestCreateWallet(nc *nats.Conn) string {
+
+	response, err := nc.Request("internalServer.wallet", nil, 10 * time.Second)
+	if err != nil {
+		fmt.Println(err.Error())
+		return ""
+	}
+	msg := IotaRequest{}
+	json.Unmarshal(response.Data, &msg)
+	return msg.ClientID
+}
+
+func RequestFaucet(nc *nats.Conn, walletId string) uint64 {
+	requestData := IotaRequest{ClientID: walletId}
+	data, _ := json.Marshal(requestData)
+	response, err := nc.Request("internalServer.faucet", data, 10 * time.Second)
+	if err != nil {
+		fmt.Println(err.Error())
+		return 0
+	}
+	msg := IotaRequest{}
+	json.Unmarshal(response.Data, &msg)
+	return msg.IotaValue
 }

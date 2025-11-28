@@ -1,6 +1,6 @@
 import { getFullnodeUrl, IotaClient } from '@iota/iota-sdk/client';
 import { Ed25519Keypair } from '@iota/iota-sdk/keypairs/ed25519';
-//import { Transaction } from '@iota/iota-sdk/transactions';
+import { Transaction } from '@iota/iota-sdk/transactions';
 import { requestIotaFromFaucetV0 } from '@iota/iota-sdk/faucet';
 import * as nats from "nats";
 
@@ -18,24 +18,74 @@ function createWallet(){
     return address
 }
 
-async function main() {
+async function faucetWallet(address: string) {
+    console.log('🚰 Solicitando fundos ao Faucet...');
+    try {
+        await requestIotaFromFaucetV0({
+            host: FAUCET_URL,
+            recipient: address,
+        });
+        return 1;
+    } catch (e) {
+        console.error("Erro no Faucet. Verifique se a rede local está rodando com --with-faucet");
+        return 0;
+    }
+}
 
+async function getBalance(addr: string, client: IotaClient) {
+    let balance = 0, tries = 0;
+    
+    while (balance === 0 && tries < 15) {
+        tries++;
+        const { data } = await client.getCoins({ owner: addr });
+        balance = data.reduce((sum, utxo) => sum + parseInt(utxo.balance), 0);
+
+        if (balance === 0) {
+            await new Promise(r => setTimeout(r, 1000));
+        }
+    }
+    console.log(`💰 Saldo recebido: ${balance} NANOS`);
+    return balance
+}
+
+async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>){
+    nc.subscribe("internalServer.wallet", {
+        callback(err, msg) {
+            const wallet = createWallet()
+            faucetWallet(wallet)
+            const resposta = { ok: true, client: wallet };
+            msg.respond(jc.encode(resposta));
+        },
+    });
+}
+
+async function handleFaucetWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient){
+    nc.subscribe("internalServer.faucet", {
+        async callback(err, msg) {
+            const decMes = jc.decode(msg.data) as any;
+            console.log("Recebi:", decMes);
+
+            // await faucetWallet(decMes.client);
+            const iotaBalance = await getBalance(decMes.client, client)
+            console.log("valor debug:", iotaBalance);
+            const resposta = { ok: false, client: decMes.client, price: iotaBalance };
+            msg.respond(jc.encode(resposta));
+        },
+    });
+    
+}
+
+async function main() {
 
     const nc = await nats.connect({ servers: "localhost:4222" });
     const jc = nats.JSONCodec();
-    const walletRequest = nc.subscribe("internalServer.wallet");
+    
 
     const client = new IotaClient({ url: NETWORK_URL });
     console.log(`📡 Conectado à rede em: ${NETWORK_URL}`);
 
-    for await (const msg of walletRequest) {
-        const decMess = jc.decode(msg.data);
-        console.log("Recebi:", decMess);
-        
-        const resposta = { ok: false, msg: createWallet() };
-        msg.respond(jc.encode(resposta));
-    }
-
+    handleCreateWallet(nc, jc)
+    handleFaucetWallet(nc, jc, client)
     // console.log('--- Iniciando Demo IOTA (SDK TypeScript) ---\n');
 
     // // 1. Conectar ao Cliente IOTA
@@ -72,7 +122,7 @@ async function main() {
     //     }
     // }
     // console.log(`💰 Saldo recebido: ${balance} NANOS`);
-
+    //getBalance(address, client)
     // // 4. Criar um Destinatário (apenas para receber)
     // const recipientKeypair = new Ed25519Keypair();
     // const recipientAddress = recipientKeypair.getPublicKey().toIotaAddress();
