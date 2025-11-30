@@ -40,3 +40,16 @@ func RequestFaucet(nc *nats.Conn, walletId string) uint64 {
 	json.Unmarshal(response.Data, &msg)
 	return msg.IotaValue
 }
+
+func RequestTransaction(nc *nats.Conn, walletId string, destination string) bool {
+	requestData := IotaRequest{ClientID: walletId, SecondClientID: destination}
+	data, _ := json.Marshal(requestData)
+	response, err := nc.Request("internalServer.transaction", data, 10 * time.Second)
+	if err != nil {
+		fmt.Println(err.Error())
+		return false
+	}
+	msg := IotaRequest{}
+	json.Unmarshal(response.Data, &msg)
+	return msg.Ok
+}
