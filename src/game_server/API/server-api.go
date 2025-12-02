@@ -8,30 +8,35 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+type Wallet struct {
+    Address string	`json:"address"`
+    Secret  string	`json:"secret"`
+}
+
 type IotaRequest struct {
-	ClientID 		string 	`json:"client"`
-	SecondClientID 	string 	`json:"aux_client"`
+	ClientID 		Wallet 	`json:"client"`
+	SecondClientID 	Wallet 	`json:"aux_client"`
 	Ok     			bool   	`json:"ok"`
 	IotaValue		uint64	`json:"price"`	
 }
 
 
-func RequestCreateWallet(nc *nats.Conn) string {
+func RequestCreateWallet(nc *nats.Conn) Wallet {
 
 	response, err := nc.Request("internalServer.wallet", nil, 10 * time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
-		return ""
+		return Wallet{}
 	}
 	msg := IotaRequest{}
 	json.Unmarshal(response.Data, &msg)
 	return msg.ClientID
 }
 
-func RequestFaucet(nc *nats.Conn, walletId string) uint64 {
-	requestData := IotaRequest{ClientID: walletId}
+func RequestBalance(nc *nats.Conn, wallet Wallet) uint64 {
+	requestData := IotaRequest{ClientID: wallet}
 	data, _ := json.Marshal(requestData)
-	response, err := nc.Request("internalServer.faucet", data, 10 * time.Second)
+	response, err := nc.Request("internalServer.balance", data, 20 * time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return 0
@@ -41,10 +46,23 @@ func RequestFaucet(nc *nats.Conn, walletId string) uint64 {
 	return msg.IotaValue
 }
 
-func RequestTransaction(nc *nats.Conn, walletId string, destination string) bool {
-	requestData := IotaRequest{ClientID: walletId, SecondClientID: destination}
+func RequestFaucet(nc *nats.Conn, wallet Wallet) uint64 {
+	requestData := IotaRequest{ClientID: wallet}
 	data, _ := json.Marshal(requestData)
-	response, err := nc.Request("internalServer.transaction", data, 10 * time.Second)
+	response, err := nc.Request("internalServer.faucet", data, 20 * time.Second)
+	if err != nil {
+		fmt.Println(err.Error())
+		return 0
+	}
+	msg := IotaRequest{}
+	json.Unmarshal(response.Data, &msg)
+	return msg.IotaValue
+}
+
+func RequestTransaction(nc *nats.Conn, source Wallet, destination Wallet, value int) bool {
+	requestData := IotaRequest{ClientID: source, SecondClientID: destination, IotaValue: uint64(value)}
+	data, _ := json.Marshal(requestData)
+	response, err := nc.Request("internalServer.transaction", data, 20 * time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return false

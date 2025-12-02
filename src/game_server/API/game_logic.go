@@ -35,7 +35,7 @@ type TradeQueue struct{
 
 type Player struct{
     Id int
-	Wallet string
+	Wallet Wallet
     Cards []int
 }
 
@@ -93,11 +93,8 @@ func (s *Store) CreatePlayer(nc *nats.Conn) (int, error) {
 		Cards: nil,
 	}
 	
-	//DEBUG
-	fmt.Println("IDK:", RequestFaucet(nc, newPlayer.Wallet))
-
 	s.players[newPlayer.Id] = newPlayer
-	fmt.Printf("[Central] Player Created: %d\n", newPlayer.Id)
+	fmt.Println("[Central] Player Created:", newPlayer.Id, newPlayer.Wallet)
 
 	return newPlayer.Id, nil
 }

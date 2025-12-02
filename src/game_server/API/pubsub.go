@@ -37,9 +37,21 @@ func SetupPS(s *Store) {
 	// for range 10 {
 	// 	fmt.Println(RequestCreateWallet(nc))
 	// }
-	for range 10 {
-		nc.Request("topic.createAccount", nil, 30*time.Second)
-	}
+	// for range 3 {
+	// 	nc.Request("topic.createAccount", nil, 30*time.Second)
+	// }
+	// for i := 1; i < 3; i++ {
+	// 	fmt.Println("faucet: ", RequestFaucet(nc, s.players[i].Wallet))
+	// }
+	
+	// fmt.Println("player1 antes: ", RequestBalance(nc, s.players[1].Wallet))
+	// fmt.Println("player2 antes: ", RequestBalance(nc, s.players[2].Wallet))
+	// time.Sleep(2 * time.Second)
+	// RequestTransaction(nc,s.players[1].Wallet,s.players[2].Wallet, 1000)
+	// time.Sleep(2 * time.Second)
+	// fmt.Println("player1 depois: ", RequestBalance(nc, s.players[1].Wallet))
+	// fmt.Println("player2 depois: ", RequestBalance(nc, s.players[2].Wallet))
+	
 }
 
 func ReplyPing(nc *nats.Conn) {
