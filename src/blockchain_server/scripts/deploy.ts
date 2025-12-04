@@ -84,6 +84,7 @@ FAUCET_URL=${FAUCET_URL}
 PACKAGE_ID=${packageId}
 ADMIN_CAP_ID=${adminCapId}
 ADMIN_SECRET=${secret} 
+ADDRESS=${address} 
 `;
         fs.writeFileSync(ENV_PATH, envContent.trim());
         console.log("💾 Arquivo .env atualizado automaticamente!");

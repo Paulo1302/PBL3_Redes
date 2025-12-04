@@ -8,8 +8,10 @@ help:
 install-dependencies:
 	@npm install @iota/iota-sdk
 	@npm install nats
+	@npm install dotenv
 
 run-tsc:
+	@npx tsx scripts/deploy.ts
 	@npx tsx index.ts
 
 iota-init:

@@ -19,6 +19,9 @@ help:
 	@echo "  build-client  - Build client"
 	@echo "  clean         - Clean build artifacts"
 
+run:
+	@go run .
+
 # Build server (CORRIGIDO: vai para server/ não cardGame/server)
 build:
 	@echo "Building server..."

@@ -52,24 +52,9 @@ var ServerWalletAddress string
 // --- FUNÇÃO INIT (Roda antes de tudo) ---
 func init() {
 	// 1. Tenta carregar .env da pasta atual (game_server/.env)
-	godotenv.Load()
-
-	// 2. Se a variável ainda estiver vazia, tenta carregar da pasta vizinha (blockchain_server/.env)
-	if os.Getenv("SERVER_WALLET_ADDRESS") == "" {
-		// "../blockchain_server/.env" sobe um nível e entra na outra pasta
-		err := godotenv.Load("../blockchain_server/.env")
-		if err != nil {
-			log.Println("⚠️ Aviso: Não consegui ler '../blockchain_server/.env'")
-		}
-	}
-
-	// 3. Busca o endereço final
-	ServerWalletAddress = os.Getenv("SERVER_WALLET_ADDRESS") 
-
-    if ServerWalletAddress == "" {
-
-        ServerWalletAddress = os.Getenv("ADDRESS") 
-    }
+	godotenv.Load("../blockchain_server/.env")
+	
+	ServerWalletAddress = os.Getenv("ADDRESS")
 
 	if ServerWalletAddress == "" {
 		log.Fatal("❌ ERRO CRÍTICO: Não encontrei o endereço da carteira em nenhum .env!")
