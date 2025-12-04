@@ -8,6 +8,7 @@ help:
 install-dependencies:
 	@npm install @iota/iota-sdk
 	@npm install nats
+	@npm i --save-dev @types/node
 	@npm install dotenv
 
 run-tsc:

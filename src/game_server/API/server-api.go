@@ -103,12 +103,12 @@ func RequestMintCard(nc *nats.Conn, address string, value int) (string, error) {
 	data, _ := json.Marshal(req)
 	
 	// Timeout maior (10s) pois blockchain demora
-	msg, err := nc.Request("internalServer.mintCard", data, 10*time.Second)
+	msg, err := nc.Request("internalServer.mintCard", data, 20*time.Second)
 	if err != nil {
 		return "", err
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(msg.Data, &resp)
 	
 	if ok, _ := resp["ok"].(bool); ok {
@@ -144,7 +144,7 @@ func RequestTransferCard(nc *nats.Conn, ownerSecret, objectID, recipientAddr str
 		return err
 	}
 	
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(msg.Data, &resp)
 	if ok, _ := resp["ok"].(bool); !ok {
 		return fmt.Errorf("falha na transferência")

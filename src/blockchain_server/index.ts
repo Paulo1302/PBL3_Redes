@@ -150,27 +150,32 @@ async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
     nc.subscribe("internalServer.mintCard", {
         async callback(err, msg) {
             const req = jc.decode(msg.data) as any;
+
             console.log(`📦 Mintando carta valor ${req.value} para ${req.address}`);
 
             const tx = new Transaction();
+
             tx.moveCall({
                 target: `${PACKAGE_ID}::core::mint_card`,
                 arguments: [
-                    tx.object(ADMIN_CAP_ID),
                     tx.pure.u64(req.value),
                     tx.pure.address(req.address)
                 ]
             });
 
-            // O Servidor (Admin) assina a criação
+            // Assinado pelo admin (servidor)
             const result = await client.signAndExecuteTransaction({
                 signer: serverKeypair,
                 transaction: tx,
             });
-            
-            msg.respond(jc.encode({ ok: true, digest: result.digest }));
+
+            msg.respond(jc.encode({
+                ok: true,
+                digest: result.digest
+            }));
         }
     });
+
 }
 
 // 2. LOG MATCH (Salvar Resultado)

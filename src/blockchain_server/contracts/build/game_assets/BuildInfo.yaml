@@ -5,7 +5,7 @@ compiled_package_info:
     game_assets: "0000000000000000000000000000000000000000000000000000000000000000"
     iota: "0000000000000000000000000000000000000000000000000000000000000002"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
-  source_digest: 0D68BBBFEB3A897D53DE303D3F532919B02B41784D51C6848FC1E4FDDC41DDC7
+  source_digest: 087309872977A556C10E9748FAC4FD089F14BE4995B9FF91E6B38B9283BC1D8D
   build_flags:
     dev_mode: false
     test_mode: false
@@ -32,7 +32,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/iotaledger/iota.git"
-              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              git_rev: 14632491a9d1c35e3055be16c157539fb024ab62
               subdir: crates/iota-framework/packages/iota-framework
           subst: ~
           digest: ~
@@ -42,7 +42,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/iotaledger/iota.git"
-              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              git_rev: 14632491a9d1c35e3055be16c157539fb024ab62
               subdir: crates/iota-framework/packages/iota-system
           subst: ~
           digest: ~
@@ -52,7 +52,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/iotaledger/iota.git"
-              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              git_rev: 14632491a9d1c35e3055be16c157539fb024ab62
               subdir: crates/iota-framework/packages/move-stdlib
           subst: ~
           digest: ~
@@ -62,7 +62,7 @@ compiled_package_info:
           kind:
             Git:
               git_url: "https://github.com/iotaledger/iota.git"
-              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              git_rev: 14632491a9d1c35e3055be16c157539fb024ab62
               subdir: crates/iota-framework/packages/stardust
           subst: ~
           digest: ~
