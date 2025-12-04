@@ -61,10 +61,10 @@ async function getBalance(addr: string, client: SuiClient) { // MUDANÇA: SuiCli
 
 // Garante que a carteira tenha dinheiro para operar
 async function ensureFunds(address: string, client: SuiClient) {
-    const { data } = await client.getCoins({ owner: address });
-    const balance = data.reduce((sum, c) => sum + parseInt(c.balance), 0);
+    let { data } = await client.getCoins({ owner: address });
+    let balance = data.reduce((sum, c) => sum + parseInt(c.balance), 0);
     
-    // Se tiver menos de 0.5 Token (500.000.000 Nanos)
+    // Se tiver menos de 0.5 Token, recarrega
     if (balance < 500_000_000) {
         console.log(`📉 Saldo baixo (${balance}). Recarregando Faucet para ${address}...`);
         try {
@@ -72,9 +72,20 @@ async function ensureFunds(address: string, client: SuiClient) {
                 host: process.env.FAUCET_URL!,
                 recipient: address
             });
-            await new Promise(r => setTimeout(r, 1000));
+            
+            // Espera ativa: Aguarda até 5 segundos pelo saldo
+            console.log("⏳ Aguardando recarga...");
+            for (let i = 0; i < 5; i++) {
+                await new Promise(r => setTimeout(r, 1000)); // Espera 1s
+                const newData = await client.getCoins({ owner: address });
+                const newBalance = newData.data.reduce((sum, c) => sum + parseInt(c.balance), 0);
+                if (newBalance > balance) {
+                    console.log("✅ Recarga confirmada!");
+                    break;
+                }
+            }
         } catch (e) {
-            console.log("Erro no faucet (talvez rate limit), tentando seguir...");
+            console.log("Erro no faucet (talvez rate limit), tentando seguir com o que tem...");
         }
     }
 }
@@ -100,14 +111,26 @@ async function performTransaction(src: Ed25519Keypair, dest: string, amountToSen
 
 // --- HANDLERS DO NATS ---
 
-async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>){
+async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient){ // Adicione client aqui
     nc.subscribe("internalServer.wallet", {
-        callback(err, msg) {
+        async callback(err, msg) { // Adicione async aqui
             if (err) return;
             const { secret, address } = createWallet()
 
-            // Dispara faucet sem await para não travar a resposta imediata se o faucet for lento
-            faucetWallet(address).catch(console.error);
+            console.log(`⏳ Novo usuário ${address}. Solicitando Faucet e aguardando confirmação...`);
+            
+            // 1. Pede o dinheiro
+            await faucetWallet(address);
+
+            // 2. Trava o processo até o dinheiro aparecer na conta (Polling)
+            // Reutiliza a função getBalance que já tem um loop de espera
+            const saldoInicial = await getBalance(address, client);
+
+            if (saldoInicial > 0) {
+                console.log(`✅ Conta pronta! Saldo confirmado: ${saldoInicial}`);
+            } else {
+                console.warn("⚠️ Conta criada, mas o saldo ainda não confirmou. Pode falhar na primeira compra.");
+            }
             
             const resposta = { ok: true, client: {secret, address} };
             msg.respond(jc.encode(resposta));
@@ -284,7 +307,7 @@ async function main() {
     console.log("🚀 Iniciando Workers...");
 
     // 4. Iniciar Handlers
-    handleCreateWallet(nc, jc);
+    handleCreateWallet(nc, jc, client);
     handleFaucetWallet(nc, jc, client);
     handleGetBalance(nc, jc, client);
     
