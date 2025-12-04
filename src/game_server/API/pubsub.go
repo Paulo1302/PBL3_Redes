@@ -32,26 +32,6 @@ func SetupPS(s *Store) {
 	ClientSeeCards(nc, s)
 	ClientJoinGameQueue(nc, s)
 	ClientPlayCards(nc, s)
-	
-	//DEBUG
-	// for range 10 {
-	// 	fmt.Println(RequestCreateWallet(nc))
-	// }
-	// for range 3 {
-	// 	nc.Request("topic.createAccount", nil, 30*time.Second)
-	// }
-	// for i := 1; i < 3; i++ {
-	// 	fmt.Println("faucet: ", RequestFaucet(nc, s.players[i].Wallet))
-	// }
-	
-	// fmt.Println("player1 antes: ", RequestBalance(nc, s.players[1].Wallet))
-	// fmt.Println("player2 antes: ", RequestBalance(nc, s.players[2].Wallet))
-	// time.Sleep(2 * time.Second)
-	// RequestTransaction(nc,s.players[1].Wallet,s.players[2].Wallet, 1000)
-	// time.Sleep(2 * time.Second)
-	// fmt.Println("player1 depois: ", RequestBalance(nc, s.players[1].Wallet))
-	// fmt.Println("player2 depois: ", RequestBalance(nc, s.players[2].Wallet))
-	
 }
 
 func ReplyPing(nc *nats.Conn) {
@@ -131,9 +111,12 @@ func ClientOpenPack(nc *nats.Conn, s *Store) {
 		var payload map[string]any
 		json.Unmarshal(m.Data, &payload)
 
-		cards, err := s.OpenPack(int(payload["client_id"].(float64)))
+		cards, err := s.OpenPack(nc, int(payload["client_id"].(float64)))
+		
 		if err != nil {
-			nc.Publish(m.Reply, []byte(`{"err":"ERROR_OPENING"}`))
+			resp := map[string]any{"err": err.Error()}
+			data, _ := json.Marshal(resp)
+			nc.Publish(m.Reply, data)
 			return
 		}
 
@@ -147,7 +130,6 @@ func ClientOpenPack(nc *nats.Conn, s *Store) {
 	})
 }
 
-// Adicionada implementação faltante para evitar erro em SetupPS
 func ClientSeeCards(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.seeCards", func(m *nats.Msg) {
 		var payload map[string]any
@@ -170,8 +152,6 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 		nc.Publish(m.Reply, data)
 	})
 }
-
-
 
 func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.findMatch", func(m *nats.Msg) {
@@ -208,11 +188,9 @@ func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 	})
 }
 
-// Função auxiliar para enviar resultados (era chamada mas não existia)
 func SendingGameResult(payload map[string]any, nc *nats.Conn) {
 	data, _ := json.Marshal(payload)
 	if nc != nil {
-		// Publica no tópico que os clientes estão escutando (ex: game.server)
 		nc.Publish("game.server", data)
 		fmt.Println("Result sent:", payload)
 	}
@@ -232,52 +210,39 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 		clientID := int(payload["client_id"].(float64))
 		card := int(payload["card"].(float64))
 
-		// Executa a jogada
-		err := s.PlayCard(gameID, clientID, card)
+		// CORREÇÃO: Passando 'nc' como primeiro argumento
+		err := s.PlayCard(nc, gameID, clientID, card)
 		if err != nil {
 			log.Println("Error executing PlayCard:", err)
 			return
 		}
 
-		// Verifica o estado do jogo
+		// A partir daqui, a lógica de quem ganhou foi movida para dentro de s.ResolveMatch
+		// O restante do código abaixo serve para notificar os clientes via NATS
+		// Então precisamos ler o estado atualizado do jogo para mandar a resposta
+		
 		s.mu.Lock()
 		match, exists := s.matchHistory[gameID]
 		s.mu.Unlock()
 
-		if !exists {
-			return
-		}
+		if !exists { return }
 
-		// Se ambos jogaram, calcula o resultado
+		// Se ambos jogaram, o PlayCard já chamou ResolveMatch e logou na blockchain.
+		// Agora só precisamos avisar os frontends quem ganhou.
 		if match.Card1 != 0 && match.Card2 != 0 {
-
-			// --- CORREÇÃO AQUI: Declarando separadamente para evitar erro ---
 			var response1 map[string]any
 			var response2 map[string]any
-			// ---------------------------------------------------------------
 
 			if match.Card1 > match.Card2 {
-				response1 = map[string]any{
-					"client_id": match.P1,
-					"result":    "win",
-					"card":      match.Card2,
-				}
-				response2 = map[string]any{
-					"client_id": match.P2,
-					"result":    "lose",
-					"card":      match.Card1,
-				}
+				response1 = map[string]any{"client_id": match.P1, "result": "win", "card": match.Card2}
+				response2 = map[string]any{"client_id": match.P2, "result": "lose", "card": match.Card1}
+			} else if match.Card2 > match.Card1 {
+				response1 = map[string]any{"client_id": match.P1, "result": "lose", "card": match.Card2}
+				response2 = map[string]any{"client_id": match.P2, "result": "win", "card": match.Card1}
 			} else {
-				response1 = map[string]any{
-					"client_id": match.P1,
-					"result":    "lose",
-					"card":      match.Card2,
-				}
-				response2 = map[string]any{
-					"client_id": match.P2,
-					"result":    "win",
-					"card":      match.Card1,
-				}
+				// Empate
+				response1 = map[string]any{"client_id": match.P1, "result": "draw", "card": match.Card2}
+				response2 = map[string]any{"client_id": match.P2, "result": "draw", "card": match.Card1}
 			}
 
 			SendingGameResult(response1, nc)

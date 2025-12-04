@@ -1,0 +1,10 @@
+[package]
+name = "game_assets"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+Iota = { git = "https://github.com/iotaledger/iota.git", subdir = "crates/iota-framework/packages/iota-framework", rev = "develop" }
+
+[addresses]
+game_assets = "0x0"

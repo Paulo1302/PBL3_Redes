@@ -1,3 +1,7 @@
-
-src/blockchain_server/node_modules
+gitsrc/blockchain_server/node_modules
 *.json
+node_modules/
+.env
+.DS_Store
+wallet.key
+client.sqlite

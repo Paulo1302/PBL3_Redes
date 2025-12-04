@@ -1,0 +1,72 @@
+---
+compiled_package_info:
+  package_name: game_assets
+  address_alias_instantiation:
+    game_assets: "0000000000000000000000000000000000000000000000000000000000000000"
+    iota: "0000000000000000000000000000000000000000000000000000000000000002"
+    std: "0000000000000000000000000000000000000000000000000000000000000001"
+  source_digest: 0D68BBBFEB3A897D53DE303D3F532919B02B41784D51C6848FC1E4FDDC41DDC7
+  build_flags:
+    dev_mode: false
+    test_mode: false
+    generate_docs: false
+    save_disassembly: false
+    install_dir: ~
+    force_recompilation: false
+    lock_file: "./Move.lock"
+    fetch_deps_only: false
+    skip_fetch_latest_git_deps: false
+    default_flavor: iota
+    default_edition: ~
+    deps_as_root: false
+    silence_warnings: false
+    warnings_are_errors: false
+    json_errors: false
+    additional_named_addresses: {}
+    lint_flag:
+      no_lint: false
+      lint: false
+    implicit_dependencies:
+      Iota:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/iotaledger/iota.git"
+              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              subdir: crates/iota-framework/packages/iota-framework
+          subst: ~
+          digest: ~
+          dep_override: true
+      IotaSystem:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/iotaledger/iota.git"
+              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              subdir: crates/iota-framework/packages/iota-system
+          subst: ~
+          digest: ~
+          dep_override: true
+      MoveStdlib:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/iotaledger/iota.git"
+              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              subdir: crates/iota-framework/packages/move-stdlib
+          subst: ~
+          digest: ~
+          dep_override: true
+      Stardust:
+        Internal:
+          kind:
+            Git:
+              git_url: "https://github.com/iotaledger/iota.git"
+              git_rev: 9ee2fa53971d35e92848e0117db278613aef4a79
+              subdir: crates/iota-framework/packages/stardust
+          subst: ~
+          digest: ~
+          dep_override: true
+dependencies:
+  - Iota
+  - MoveStdlib
