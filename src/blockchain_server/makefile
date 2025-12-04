@@ -1,24 +1,18 @@
 help:
 	@echo "Comandos:"
-	@echo "  install-dependencies - Instalar dependencias do TypeScript."
-	@echo "  iota-init - Iniciar blockchain para testes (IOTA)."
-	@echo "  run-tsc - Rodar código TypeScript"
-
+	@echo "  install-dependencies - Instalar dependencias."
+	@echo "  deploy - Publicar contrato e gerar .env"
+	@echo "  start - Iniciar o servidor"
 
 install-dependencies:
-	@npm install @iota/iota-sdk
-	@npm install nats
-	@npm install dotenv
+	@rm -rf node_modules package-lock.json
+	@npm install
 
-run-tsc:
-	@npx tsx scripts/deploy.ts
-	@npx tsx index.ts
+deploy:
+	@npm run deploy
+
+start:
+	@npm run start
 
 iota-init:
 	@iota start --with-faucet --force-regenesis
-
-test:
-	@gnome-terminal -- fish -c "make iota-init; fish"
-	@sleep 3
-	@npm install @iota/iota-sdk
-	@make run-tsc

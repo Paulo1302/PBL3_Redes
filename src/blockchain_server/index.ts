@@ -1,25 +1,26 @@
-import { getFullnodeUrl, IotaClient } from '@iota/iota-sdk/client';
-import { Ed25519Keypair } from '@iota/iota-sdk/keypairs/ed25519';
-import { Transaction } from '@iota/iota-sdk/transactions';
-import { requestIotaFromFaucetV0 } from '@iota/iota-sdk/faucet';
+import { getFullnodeUrl, SuiClient } from '@mysten/sui/client';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { Transaction } from '@mysten/sui/transactions';
+import { requestSuiFromFaucetV0 } from '@mysten/sui/faucet';
 import * as nats from "nats";
 import * as dotenv from 'dotenv';
-
 
 dotenv.config();
 
 // --- CONFIGURAÇÕES ---
 const NETWORK_URL = process.env.NETWORK_URL || 'http://127.0.0.1:9000';
 const FAUCET_URL = process.env.FAUCET_URL || 'http://127.0.0.1:9123/gas';
+// Adicionando verificação de segurança para variáveis obrigatórias
 const PACKAGE_ID = process.env.PACKAGE_ID!;
 const ADMIN_CAP_ID = process.env.ADMIN_CAP_ID!;
 const ADMIN_SECRET = process.env.ADMIN_SECRET!;
 
+// --- FUNÇÕES UTILITÁRIAS ---
 
 function createWallet(){
     const keypair = new Ed25519Keypair();
     const secret = keypair.getSecretKey();
-    const address = keypair.getPublicKey().toIotaAddress();
+    const address = keypair.toSuiAddress(); // MUDANÇA: toSuiAddress
 
     console.log(`🆕 Carteira criada:`);
     console.log(`   🔑 PrivateKey: ${secret}`);
@@ -31,7 +32,7 @@ function createWallet(){
 async function faucetWallet(addr: string) {
     console.log('🚰 Solicitando fundos ao Faucet...');
     try {
-        await requestIotaFromFaucetV0({
+        await requestSuiFromFaucetV0({ // MUDANÇA: requestSuiFromFaucetV0
             host: FAUCET_URL,
             recipient: addr,
         }); 
@@ -42,7 +43,7 @@ async function faucetWallet(addr: string) {
     }
 }
 
-async function getBalance(addr: string, client: IotaClient) {
+async function getBalance(addr: string, client: SuiClient) { // MUDANÇA: SuiClient
     let balance = 0, tries = 0;
     
     while (balance === 0 && tries < 15) {
@@ -58,14 +59,33 @@ async function getBalance(addr: string, client: IotaClient) {
     return balance
 }
 
-function performTransaction(src: Ed25519Keypair, dest: string, amountToSend: number, client: IotaClient) {
+// Garante que a carteira tenha dinheiro para operar
+async function ensureFunds(address: string, client: SuiClient) {
+    const { data } = await client.getCoins({ owner: address });
+    const balance = data.reduce((sum, c) => sum + parseInt(c.balance), 0);
+    
+    // Se tiver menos de 0.5 Token (500.000.000 Nanos)
+    if (balance < 500_000_000) {
+        console.log(`📉 Saldo baixo (${balance}). Recarregando Faucet para ${address}...`);
+        try {
+            await requestSuiFromFaucetV0({
+                host: process.env.FAUCET_URL!,
+                recipient: address
+            });
+            await new Promise(r => setTimeout(r, 1000));
+        } catch (e) {
+            console.log("Erro no faucet (talvez rate limit), tentando seguir...");
+        }
+    }
+}
+
+async function performTransaction(src: Ed25519Keypair, dest: string, amountToSend: number, client: SuiClient) {
     const tx = new Transaction();
 
-    console.log("teste!!!");
     // Comando: SplitCoins (Tira do Gas) -> TransferObjects (Envia)
-    const [coin] = tx.splitCoins(tx.gas, [amountToSend]);
+    // MUDANÇA: tx.pure.u64 para garantir tipagem correta no Move
+    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountToSend)]);
     tx.transferObjects([coin], dest);
-    console.log("teste2!!!");
 
     console.log('\n🚀 Enviando transação...');
     return client.signAndExecuteTransaction({
@@ -78,12 +98,16 @@ function performTransaction(src: Ed25519Keypair, dest: string, amountToSend: num
     });
 }
 
+// --- HANDLERS DO NATS ---
+
 async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>){
     nc.subscribe("internalServer.wallet", {
         callback(err, msg) {
+            if (err) return;
             const { secret, address } = createWallet()
 
-            faucetWallet(address)
+            // Dispara faucet sem await para não travar a resposta imediata se o faucet for lento
+            faucetWallet(address).catch(console.error);
             
             const resposta = { ok: true, client: {secret, address} };
             msg.respond(jc.encode(resposta));
@@ -91,160 +115,155 @@ async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknow
     });
 }
 
-async function handleGetBalance(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
+async function handleGetBalance(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient) {
     nc.subscribe("internalServer.balance", {
         async callback(err, msg) {
+            if (err) return;
             const decMes = jc.decode(msg.data) as any;
-            console.log("Recebi:", decMes);
-
+            
             const iotaBalance = await getBalance(decMes.client.address, client)
-            console.log("valor debug:", iotaBalance);
             const resposta = { ok: true, client: decMes.client, price: iotaBalance };
             msg.respond(jc.encode(resposta));
         },
     });
 }
 
-async function handleFaucetWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient){
+async function handleFaucetWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient){
     nc.subscribe("internalServer.faucet", {
         async callback(err, msg) {
+            if (err) return;
             const decMes = jc.decode(msg.data) as any;
-            console.log("Recebi:", decMes);
-
+            
             await faucetWallet(decMes.client.address);
             const iotaBalance = await getBalance(decMes.client.address, client)
-            console.log("valor debug:", iotaBalance);
             const resposta = { ok: true, client: decMes.client, price: iotaBalance };
             msg.respond(jc.encode(resposta));
         },
     });
-    
 }
 
 
-async function handleTransaction(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient){
+async function handleTransaction(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient){
     nc.subscribe("internalServer.transaction", {
         async callback(err, msg) {
+            if (err) return;
             const decMes = jc.decode(msg.data) as any;
-            console.log("Recebi Transação:", decMes);
+            console.log("Recebi Transação de Pagamento");
             
-            // Verifica saldo antes de tentar gastar
-            // Usamos o endereço da chave pública derivada do segredo recebido
-            const keypair = Ed25519Keypair.fromSecretKey(decMes.client.secret);
-            const address = keypair.getPublicKey().toIotaAddress();
+            try {
+                // Recupera a chave a partir do segredo
+                const keypair = Ed25519Keypair.fromSecretKey(decMes.client.secret);
+                const address = keypair.toSuiAddress();
 
-            await ensureFunds(address, client);
+                await ensureFunds(address, client);
 
-            const result = await performTransaction(keypair, decMes.aux_client.address, decMes.price, client)
-            
-            const resposta = { ok: result.effects?.status.status === 'success', client: decMes.client, };
-            msg.respond(jc.encode(resposta));
+                const result = await performTransaction(keypair, decMes.aux_client.address, decMes.price, client)
+                
+                const resposta = { ok: result.effects?.status.status === 'success', client: decMes.client, };
+                msg.respond(jc.encode(resposta));
+            } catch (error) {
+                console.error("Erro na transação:", error);
+                msg.respond(jc.encode({ ok: false }));
+            }
         },
     });
 }
 
-// --- NOVOS HANDLERS PARA O GO CHAMAR ---
-
 // 1. MINT (Abrir Pacote)
-async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient, serverKeypair: Ed25519Keypair) {
+async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient, serverKeypair: Ed25519Keypair) {
     nc.subscribe("internalServer.mintCard", {
         async callback(err, msg) {
+            if (err) return;
             const req = jc.decode(msg.data) as any;
             console.log(`📦 Mintando carta valor ${req.value} para ${req.address}`);
 
-            const tx = new Transaction();
-            tx.moveCall({
-                target: `${PACKAGE_ID}::core::mint_card`,
-                arguments: [
-                    tx.object(ADMIN_CAP_ID),
-                    tx.pure.u64(req.value),
-                    tx.pure.address(req.address)
-                ]
-            });
+            try {
+                const tx = new Transaction();
+                tx.moveCall({
+                    target: `${PACKAGE_ID}::core::mint_card`,
+                    arguments: [
+                        tx.object(ADMIN_CAP_ID),
+                        tx.pure.u64(req.value),
+                        tx.pure.address(req.address)
+                    ]
+                });
 
-            // O Servidor (Admin) assina a criação
-            const result = await client.signAndExecuteTransaction({
-                signer: serverKeypair,
-                transaction: tx,
-            });
-            
-            msg.respond(jc.encode({ ok: true, digest: result.digest }));
+                // O Servidor (Admin) assina a criação
+                const result = await client.signAndExecuteTransaction({
+                    signer: serverKeypair,
+                    transaction: tx,
+                });
+                
+                msg.respond(jc.encode({ ok: true, digest: result.digest }));
+            } catch (error) {
+                console.error("Erro no Mint:", error);
+                msg.respond(jc.encode({ ok: false, error: "Mint failed" }));
+            }
         }
     });
 }
 
 // 2. LOG MATCH (Salvar Resultado)
-async function handleLogMatch(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient, serverKeypair: Ed25519Keypair) {
+async function handleLogMatch(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient, serverKeypair: Ed25519Keypair) {
     nc.subscribe("internalServer.logMatch", {
         async callback(err, msg) {
+            if (err) return;
             const req = jc.decode(msg.data) as any;
             
-            const tx = new Transaction();
-            tx.moveCall({
-                target: `${PACKAGE_ID}::core::log_match`,
-                arguments: [
-                    tx.pure.address(req.winner),
-                    tx.pure.address(req.loser),
-                    tx.pure.u64(req.val_win),
-                    tx.pure.u64(req.val_lose)
-                ]
-            });
+            try {
+                const tx = new Transaction();
+                tx.moveCall({
+                    target: `${PACKAGE_ID}::core::log_match`,
+                    arguments: [
+                        tx.pure.address(req.winner),
+                        tx.pure.address(req.loser),
+                        tx.pure.u64(req.val_win),
+                        tx.pure.u64(req.val_lose)
+                    ]
+                });
 
-            // Qualquer um pode pagar o gas desse log, vamos usar o server
-            await client.signAndExecuteTransaction({ signer: serverKeypair, transaction: tx });
-            msg.respond(jc.encode({ ok: true }));
+                await client.signAndExecuteTransaction({ signer: serverKeypair, transaction: tx });
+                msg.respond(jc.encode({ ok: true }));
+            } catch (error) {
+                console.error("Erro no LogMatch:", error);
+                msg.respond(jc.encode({ ok: false }));
+            }
         }
     });
 }
 
 // 3. TRANSFERÊNCIA DE CARTA (Troca)
-// O Go manda o segredo do dono da carta para autorizar a transferência
-async function handleTransferCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
+async function handleTransferCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: SuiClient) {
     nc.subscribe("internalServer.transferCard", {
         async callback(err, msg) {
+            if (err) return;
             const req = jc.decode(msg.data) as any;
             
-            // Recupera a carteira do dono da carta
-            const signer = Ed25519Keypair.fromSecretKey(req.ownerSecret);
-            
-            const tx = new Transaction();
-            tx.moveCall({
-                target: `${PACKAGE_ID}::core::transfer_card`,
-                arguments: [
-                    tx.object(req.cardObjectId), // O ID do objeto na IOTA
-                    tx.pure.address(req.recipient)
-                ]
-            });
+            try {
+                // Recupera a carteira do dono da carta
+                const signer = Ed25519Keypair.fromSecretKey(req.ownerSecret);
+                
+                const tx = new Transaction();
+                tx.moveCall({
+                    target: `${PACKAGE_ID}::core::transfer_card`,
+                    arguments: [
+                        tx.object(req.cardObjectId),
+                        tx.pure.address(req.recipient)
+                    ]
+                });
 
-            await client.signAndExecuteTransaction({ signer: signer, transaction: tx });
-            msg.respond(jc.encode({ ok: true }));
+                await client.signAndExecuteTransaction({ signer: signer, transaction: tx });
+                msg.respond(jc.encode({ ok: true }));
+            } catch (error) {
+                console.error("Erro Transferencia:", error);
+                msg.respond(jc.encode({ ok: false }));
+            }
         }
     });
 }
 
-// Garante que a carteira tenha dinheiro para operar
-async function ensureFunds(address: string, client: IotaClient) {
-    const { data } = await client.getCoins({ owner: address });
-    const balance = data.reduce((sum, c) => sum + parseInt(c.balance), 0);
-    
-    // Se tiver menos de 0.5 IOTA (500.000.000 Nanos)
-    if (balance < 500_000_000) {
-        console.log(`📉 Saldo baixo (${balance}). Recarregando Faucet para ${address}...`);
-        try {
-            await requestIotaFromFaucetV0({
-                host: process.env.FAUCET_URL!,
-                recipient: address
-            });
-            // Espera o dinheiro cair
-            await new Promise(r => setTimeout(r, 1000));
-        } catch (e) {
-            console.log("Erro no faucet (talvez rate limit), tentando seguir...");
-        }
-    }
-}
-
 async function main() {
-    // 1. Validação de Segurança (Primeira coisa a fazer)
+    // 1. Validação de Segurança
     if (!PACKAGE_ID || !ADMIN_SECRET) {
         console.error("❌ ERRO: Variáveis de ambiente não encontradas.");
         console.error("   Rode 'npm run deploy' primeiro!");
@@ -255,16 +274,16 @@ async function main() {
     const nc = await nats.connect({ servers: "localhost:4222" });
     const jc = nats.JSONCodec();
     
-    const client = new IotaClient({ url: NETWORK_URL });
+    const client = new SuiClient({ url: NETWORK_URL }); // MUDANÇA: SuiClient
     console.log(`📡 Conectado à rede em: ${NETWORK_URL}`);
 
-    // 3. Carregar Chave do Servidor (Antes de usar!)
+    // 3. Carregar Chave do Servidor
     const serverKeypair = Ed25519Keypair.fromSecretKey(ADMIN_SECRET);
-    console.log(`👑 Admin carregado: ${serverKeypair.getPublicKey().toIotaAddress()}`);
+    console.log(`👑 Admin carregado: ${serverKeypair.toSuiAddress()}`);
 
     console.log("🚀 Iniciando Workers...");
 
-    // 4. Iniciar Handlers (Agora serverKeypair já existe)
+    // 4. Iniciar Handlers
     handleCreateWallet(nc, jc);
     handleFaucetWallet(nc, jc, client);
     handleGetBalance(nc, jc, client);
@@ -279,4 +298,5 @@ async function main() {
 
     console.log("✅ Sistema pronto e escutando NATS.");
 }
+
 main().catch(console.error);
