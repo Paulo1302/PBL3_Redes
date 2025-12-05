@@ -1,9 +1,10 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-// MUDANÇA: Usando a SDK estável do Sui (compatível com IOTA)
-import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
-import { requestSuiFromFaucetV0 } from '@mysten/sui/faucet';
+// CORREÇÃO: Usando a SDK oficial da IOTA
+import { Ed25519Keypair } from '@iota/iota-sdk/keypairs/ed25519';
+import { getFullnodeUrl, IotaClient } from '@iota/iota-sdk/client';
+import { requestIotaFromFaucetV0 } from '@iota/iota-sdk/faucet';
 
 // Configurações
 const NETWORK_URL = 'http://127.0.0.1:9000';
@@ -12,27 +13,32 @@ const ENV_PATH = path.resolve(__dirname, '../.env');
 const CONTRACT_PATH = path.resolve(__dirname, '../contracts');
 
 async function main() {
-    console.log("🚀 Iniciando Deploy Automatizado (Via Camada de Compatibilidade)...");
+    console.log("🚀 Iniciando Deploy Automatizado (Via IOTA SDK Nativo)...");
 
-    // 1. Criar Carteira Admin
+    // 1. Criar Carteira Admin para o Servidor
     const keypair = new Ed25519Keypair();
-    const address = keypair.toSuiAddress(); // Na IOTA é o mesmo formato
+    // MUDANÇA: toSuiAddress() -> toIotaAddress()
+    const address = keypair.toIotaAddress(); 
     const secret = keypair.getSecretKey();
     
-    console.log(`👤 Admin Temporário: ${address}`);
+    console.log(`👤 Admin Temporário (Servidor): ${address}`);
 
     // 2. Garantir Saldo
     console.log("🚰 Enchendo o tanque (Faucet)...");
     try {
-        await requestSuiFromFaucetV0({ host: FAUCET_URL, recipient: address });
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // MUDANÇA: requestSuiFromFaucetV0 -> requestIotaFromFaucetV0
+        await requestIotaFromFaucetV0({ host: FAUCET_URL, recipient: address });
+        
+        // Espera um pouco mais para garantir que a rede local processou o bloco
+        await new Promise(resolve => setTimeout(resolve, 3000));
     } catch (e) {
-        console.warn("⚠️ Faucet falhou (pode ser que já tenha saldo ou rede offline)");
+        console.warn("⚠️ Faucet falhou (pode ser rate limit ou rede offline). Tentando seguir...");
     }
 
     // 3. Publicar Contrato (Usando CLI do Sistema 'iota')
     console.log("📦 Publicando Smart Contract...");
     try {
+        // Tenta garantir que a CLI global também tenha saldo, caso precise
         try { execSync(`iota client faucet`, { stdio: 'ignore' }); } catch(e) {}
         
         const output = execSync(
@@ -42,27 +48,31 @@ async function main() {
         
         const result = JSON.parse(output);
 
-        // 4. Extrair IDs
+        // 4. Extrair IDs do resultado JSON
         let packageId = '';
         let adminCapId = '';
 
+        // Procura o ID do pacote publicado
         const publishedObj = result.objectChanges.find((o: any) => o.type === 'published');
         if (publishedObj) packageId = publishedObj.packageId;
 
+        // Procura o ID do AdminCap (objeto criado pelo init do contrato)
         const createdObj = result.objectChanges.find((o: any) => 
             o.type === 'created' && o.objectType.includes('::core::AdminCap')
         );
         if (createdObj) adminCapId = createdObj.objectId;
 
         if (!packageId || !adminCapId) {
-            throw new Error("Não consegui encontrar o PackageID ou AdminCap.");
+            throw new Error("Não consegui encontrar o PackageID ou AdminCap no output.");
         }
 
         console.log(`✅ Deploy Sucesso!`);
         console.log(`   📝 Package ID: ${packageId}`);
         console.log(`   🔑 Admin Cap:  ${adminCapId}`);
 
-        // TRANSFERÊNCIA DO ADMIN CAP (Critical Fix)
+        // TRANSFERÊNCIA DO ADMIN CAP
+        // O deploy via CLI deixa o AdminCap na carteira padrão do sistema.
+        // Precisamos movê-lo para a carteira 'address' que o servidor Node.js controla.
         console.log(`🚚 Transferindo AdminCap para a carteira do servidor...`);
         execSync(
             `iota client transfer --to ${address} --object-id ${adminCapId} --gas-budget 10000000`, 

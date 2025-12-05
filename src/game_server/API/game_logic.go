@@ -138,6 +138,7 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 	fmt.Println("⚡ Enviando pedido de Mint para a Blockchain...")
 
 	for _, cardVal := range pack {
+		
 		req := MintReq{
 			Address: player.Wallet.Address,
 			// --- CORREÇÃO AQUI ---

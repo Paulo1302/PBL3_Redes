@@ -44,7 +44,7 @@ func RequestPing(nc *nats.Conn) int64 {
 		"send_time": time.Now().UnixMilli(),
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.ping", data, time.Second)
+	response, err := nc.Request("topic.ping", data, 30*30*time.Second)
 	if err != nil {
 		return -1
 	}
@@ -53,7 +53,7 @@ func RequestPing(nc *nats.Conn) int64 {
 }
 
 func RequestCreateAccount(nc *nats.Conn) int {
-	response, err := nc.Request("topic.createAccount", nil, time.Second)
+	response, err := nc.Request("topic.createAccount", nil, 30*time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return 0 //se id == 0, não conseguiu criar usuário
@@ -69,7 +69,7 @@ func RequestLogin(nc *nats.Conn, id int) (bool, error) {
 		"client_id": id,
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.login", data, time.Second)
+	response, err := nc.Request("topic.login", data, 30*time.Second)
 	if err != nil {
 		fmt.Println(err.Error())
 		return false, err
@@ -89,7 +89,7 @@ func RequestOpenPack(nc *nats.Conn, id int) ([]int, error) {
 		"client_id": id,
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.openPack", data, time.Second)
+	response, err := nc.Request("topic.openPack", data, 30*time.Second)
 
 	if err != nil {
 		fmt.Println(err.Error())
@@ -118,7 +118,7 @@ func RequestSeeCards(nc *nats.Conn, id int) ([]int, error) {
 		"client_id": id,
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.seeCards", data, time.Second)
+	response, err := nc.Request("topic.seeCards", data, 30*time.Second)
 
 	if err != nil {
 		fmt.Println(err.Error())
@@ -174,7 +174,7 @@ func RequestFindMatch(nc *nats.Conn, id int) (string, error) {
 		"client_id": id,
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.findMatch", data, time.Second)
+	response, err := nc.Request("topic.findMatch", data, 30*time.Second)
 
 	if err != nil {
 		sub.Unsubscribe()
@@ -227,7 +227,7 @@ func RequestTradeCards(nc *nats.Conn, id int, cardToSend int) (int, error) {
 		"card":cardToSend,
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.sendTrade", data, time.Second)
+	response, err := nc.Request("topic.sendTrade", data, 30*time.Second)
 
 	if err != nil {
 		sub.Unsubscribe()
@@ -279,7 +279,7 @@ func RequestTradeCards2(nc *nats.Conn, id int, card int) (int, error) {
 		"card":      card,
 	}
 	data, _ := json.Marshal(msg)
-	response, err := nc.Request("topic.sendTrade", data, time.Second)
+	response, err := nc.Request("topic.sendTrade", data, 30*time.Second)
 
 	if err != nil {
 		sub.Unsubscribe()
