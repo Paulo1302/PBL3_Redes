@@ -60,7 +60,7 @@ func menuInicial(nc *nats.Conn, reader *bufio.Reader) int {
 				continue
 			}
 			alreadyLogged, err := pubsub.RequestLogin(nc, id)
-			if err != nil || alreadyLogged{
+			if err != nil || !alreadyLogged{
 				fmt.Println("Erro no login")
 			} else {
 				fmt.Println("Login bem-sucedido!")

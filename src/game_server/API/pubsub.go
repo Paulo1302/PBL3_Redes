@@ -32,6 +32,7 @@ func SetupPS(s *Store) {
 	ClientSeeCards(nc, s)
 	ClientJoinGameQueue(nc, s)
 	ClientPlayCards(nc, s)
+	ClientJoinTradeQueue(nc, s)
 }
 
 func ReplyPing(nc *nats.Conn) {
@@ -218,10 +219,6 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 			return
 		}
 
-		// A partir daqui, a lógica de quem ganhou foi movida para dentro de s.ResolveMatch
-		// O restante do código abaixo serve para notificar os clientes via NATS
-		// Então precisamos ler o estado atualizado do jogo para mandar a resposta
-		
 		s.mu.Lock()
 		match, exists := s.matchHistory[gameID]
 		s.mu.Unlock()
@@ -249,5 +246,47 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 			SendingGameResult(response1, nc)
 			SendingGameResult(response2, nc)
 		}
+	})
+}
+
+func publishTrade(nc *nats.Conn, p1 int, card int) {
+	resp := map[string]any{
+		"client_id": p1,
+		"return_card": card,
+	}
+	fmt.Println(resp)
+	data, _ := json.Marshal(resp)
+	nc.Publish("topic.listenTrade", data)
+}
+
+func ClientJoinTradeQueue(nc *nats.Conn, s *Store) {
+	nc.Subscribe("topic.sendTrade", func(m *nats.Msg) {
+		var payload map[string]any
+		json.Unmarshal(m.Data, &payload)
+
+		t, err := s.JoinTradeQueue(int(payload["client_id"].(float64)), int(payload["card"].(float64)))
+		
+		if err != nil {
+			fmt.Println("teste:", t)
+			nc.Publish(m.Reply, []byte(`{"err":"ERROR_JOINING"}`))
+			return
+		}
+
+		respPayload := map[string]any{"status": "Added to queue", "is_leader": true}
+		data, _ := json.Marshal(respPayload)
+		nc.Publish(m.Reply, data)
+
+		trade, err := s.CreateTrade()
+
+		if err != nil {
+			fmt.Println(err)
+			fmt.Println("Match not started.")
+			return
+		}
+
+		fmt.Println("Trade started:", trade.SelfId)
+		publishTrade(nc, trade.P1, trade.Card2)
+		publishTrade(nc, trade.P2, trade.Card1)
+
 	})
 }

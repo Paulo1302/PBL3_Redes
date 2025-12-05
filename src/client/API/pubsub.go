@@ -209,7 +209,6 @@ func RequestTradeCards(nc *nats.Conn, id int, cardToSend int) (int, error) {
 		var natsPayload TradeCard
 		json.Unmarshal(msg.Data, &natsPayload)
 		if natsPayload.ClientID != id {
-			fmt.Println("NOTT")
 			return
 		}
 		if natsPayload.Err != nil {

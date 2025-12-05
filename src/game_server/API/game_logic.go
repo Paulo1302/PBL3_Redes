@@ -40,6 +40,11 @@ type PackStorage struct {
 	Cards [][3]int
 }
 
+type Trade struct {
+	Id 		int
+	Card 	int
+}
+
 // --- REMOVIDO: MintReq (Já está definido em server-api.go) ---
 
 // --- VARIÁVEIS GLOBAIS ---
@@ -180,6 +185,15 @@ func (s *Store) JoinQueue(id int) (int, error) {
 	return id, nil
 }
 
+func (s *Store) JoinTradeQueue(id int, card int) ([]Trade, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.tradeQueue = append(s.tradeQueue, Trade{Id: id, Card :card})
+
+	return s.tradeQueue, nil
+}
+
 func (s *Store) CreateMatch() (matchStruct, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -200,6 +214,42 @@ func (s *Store) CreateMatch() (matchStruct, error) {
 	s.gameQueue = s.gameQueue[2:]
 
 	fmt.Println("[Central] Match Created:", gameId, p1, "vs", p2)
+	return x, nil
+}
+
+func (s *Store) CreateTrade() (matchStruct, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.tradeQueue) < 2 {
+		return matchStruct{}, fmt.Errorf("not enough players")
+	}
+
+	p1 := s.tradeQueue[0]
+	p2 := s.tradeQueue[1]
+	gameId := uuid.New().String()
+
+	x := matchStruct{
+		P1: p1.Id, P2: p2.Id, SelfId: gameId, Card1: p1.Card, Card2: p2.Card,
+	}
+
+
+	for i, element := range s.players[p1.Id].Cards {
+		if element == p1.Card {
+			s.players[p1.Id].Cards[i] = p2.Card
+		}
+	}
+
+	for i, element := range s.players[p2.Id].Cards {
+		if element == p2.Card {
+			s.players[p2.Id].Cards[i] = p1.Card
+		}
+	}
+
+	s.tradeHistory[gameId] = x
+	s.tradeQueue = s.tradeQueue[2:]
+	
+	fmt.Println("[Central] Trade Created:", gameId, p1, "vs", p2)
 	return x, nil
 }
 
