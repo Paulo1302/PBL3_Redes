@@ -87,10 +87,11 @@ func ClientLogin(nc *nats.Conn, s *Store) {
 
 		s.mu.Lock()
 		maxCount := s.count
-		_, exists := s.players[int(payload["client_id"].(float64))]
+		id:=int(payload["client_id"].(float64))
+		_, exists := s.players[id]
 		s.mu.Unlock()
 
-		if int(payload["client_id"].(float64)) > maxCount || !exists {
+		if id > maxCount || !exists {
 			payload["err"] = "user not found"
 			data, _ := json.Marshal(payload)
 			nc.Publish(msg.Reply, data)
@@ -99,7 +100,7 @@ func ClientLogin(nc *nats.Conn, s *Store) {
 
 		resp := map[string]any{
 			"result":    true,
-			"client_id": payload["client_id"],
+			"client_id": id,
 		}
 		data, _ := json.Marshal(resp)
 		nc.Publish(msg.Reply, data)

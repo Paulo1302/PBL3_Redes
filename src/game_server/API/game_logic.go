@@ -152,7 +152,7 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 		if err != nil {
 			log.Println("❌ Falha no Mint:", err)
 		} else {
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(msg.Data, &resp)
 			if ok, _ := resp["ok"].(bool); ok {
 				fmt.Printf("✅ Carta %d criada! Digest: %s\n", cardVal, resp["digest"])
