@@ -1,13 +1,16 @@
+// Importa utilitários do IOTA SDK
 import { getFullnodeUrl, IotaClient } from '@iota/iota-sdk/client';
 import { Ed25519Keypair } from '@iota/iota-sdk/keypairs/ed25519';
 import { Transaction } from '@iota/iota-sdk/transactions';
 import { requestIotaFromFaucetV0 } from '@iota/iota-sdk/faucet';
+// Importa NATS para mensagens e dotenv para carregar variáveis
 import * as nats from "nats";
 import * as dotenv from 'dotenv';
 
 dotenv.config();
 
 // --- CONFIGURAÇÕES ---
+// URLs da rede, faucet e objetos principais, obtidos do .env
 const NETWORK_URL = process.env.NETWORK_URL || 'http://127.0.0.1:9000';
 const FAUCET_URL = process.env.FAUCET_URL || 'http://127.0.0.1:9123/gas';
 const PACKAGE_ID = process.env.PACKAGE_ID!;
@@ -15,10 +18,12 @@ const ADMIN_CAP_ID = process.env.ADMIN_CAP_ID!;
 const ADMIN_SECRET = process.env.ADMIN_SECRET!;
 
 // --- ESTADO ---
+// Fila de execução para garantir operações administrativas serializadas
 let adminQueue = Promise.resolve();
 
 // --- FUNÇÕES UTILITÁRIAS ---
 
+// Cria uma carteira (par de chaves + endereço)
 function createWallet(){
     const keypair = new Ed25519Keypair();
     const secret = keypair.getSecretKey();
@@ -26,6 +31,7 @@ function createWallet(){
     return { secret, address };
 }
 
+// Retorna saldo total de uma carteira consultando UTXOs
 async function getBalance(addr: string, client: IotaClient) {
     try {
         const { data } = await client.getCoins({ owner: addr });
@@ -33,6 +39,7 @@ async function getBalance(addr: string, client: IotaClient) {
     } catch(e) { return 0; }
 }
 
+// Garante que a carteira possui saldo mínimo, pedindo ao Faucet se necessário
 async function ensureFunds(address: string, client: IotaClient) {
     let balance = await getBalance(address, client);
     if (balance < 500_000_000) {
@@ -46,6 +53,7 @@ async function ensureFunds(address: string, client: IotaClient) {
     }
 }
 
+// Valida se um endereço é dono de um objeto on-chain
 async function verifyOwnership(client: IotaClient, address: string, objectId: string): Promise<boolean> {
     try {
         const { data } = await client.getObject({ 
@@ -63,6 +71,7 @@ async function verifyOwnership(client: IotaClient, address: string, objectId: st
     }
 }
 
+// Garante que o administrador tem saldo altíssimo, usado como “tesouraria”
 async function forceTreasuryRefill(address: string, client: IotaClient) {
     let balance = await getBalance(address, client);
     console.log(`🏦 Saldo Admin Atual: ${balance}`);
@@ -75,6 +84,7 @@ async function forceTreasuryRefill(address: string, client: IotaClient) {
     console.log("✅ Tesouraria Abastecida e Pronta.");
 }
 
+// Envia fundos para outro endereço
 async function transferFunds(signer: Ed25519Keypair, dest: string, amount: number, client: IotaClient) {
     const tx = new Transaction();
     const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amount)]);
@@ -83,6 +93,7 @@ async function transferFunds(signer: Ed25519Keypair, dest: string, amount: numbe
 }
 
 // --- EXECUÇÃO COM RETENTATIVA ---
+// Executa uma transação Move com tentativas automáticas quando objeto está trancado
 async function executeWithRetry(
     client: IotaClient, 
     signer: Ed25519Keypair, 
@@ -105,7 +116,6 @@ async function executeWithRetry(
             const res = await client.signAndExecuteTransaction({
                 signer: signer,
                 transaction: tx,
-                // CORREÇÃO: showObjectChanges: true é essencial para receber o ID
                 options: { 
                     showEffects: true,
                     showObjectChanges: true 
@@ -139,7 +149,7 @@ async function executeWithRetry(
 }
 
 // --- HANDLERS ---
-
+// Criação de nova carteira (chave + transferência inicial)
 async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient, adminKey: Ed25519Keypair){
     nc.subscribe("internalServer.wallet", {
         callback(err, msg) {
@@ -150,6 +160,7 @@ async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknow
                 try {
                     await transferFunds(adminKey, address, 20_000_000_000, client);
                     
+                    // Espera saldo confirmar na rede
                     process.stdout.write("   ⏳ Aguardando saldo confirmar");
                     let balance = 0, attempts = 0;
                     while (balance === 0 && attempts < 10) {
@@ -171,6 +182,7 @@ async function handleCreateWallet(nc: nats.NatsConnection, jc: nats.Codec<unknow
     });
 }
 
+// Obtém o saldo de um usuário
 async function handleGetBalance(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
     nc.subscribe("internalServer.balance", {
         async callback(err, msg) {
@@ -182,6 +194,7 @@ async function handleGetBalance(nc: nats.NatsConnection, jc: nats.Codec<unknown>
     });
 }
 
+// Cobra usuário → transfere para outro
 async function handleTransaction(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient){
     nc.subscribe("internalServer.transaction", {
         async callback(err, msg) {
@@ -219,6 +232,7 @@ async function handleTransaction(nc: nats.NatsConnection, jc: nats.Codec<unknown
     });
 }
 
+// Mint de cartas on-chain (Move call)
 async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient, adminKey: Ed25519Keypair) {
     nc.subscribe("internalServer.mintCard", {
         callback(err, msg) {
@@ -238,7 +252,7 @@ async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
                         return tx;
                     }, "MintCard");
 
-                    // Cast 'as any' para evitar erro de TS
+                    // Busca o ID do objeto criado
                     let createdId = "";
                     if (res.objectChanges) {
                         const created = res.objectChanges.find((o: any) => o.type === 'created');
@@ -260,6 +274,7 @@ async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
     });
 }
 
+// Log de partidas (histórico on-chain)
 async function handleLogMatch(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient, adminKey: Ed25519Keypair) {
     nc.subscribe("internalServer.logMatch", {
         callback(err, msg) {
@@ -295,6 +310,7 @@ async function handleLogMatch(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
     });
 }
 
+// Transferência de carta (Move call)
 async function handleTransferCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
     nc.subscribe("internalServer.transferCard", {
         async callback(err, msg) {
@@ -316,7 +332,7 @@ async function handleTransferCard(nc: nats.NatsConnection, jc: nats.Codec<unknow
     });
 }
 
-// --- HANDLER NOVO: BUSCAR CARTAS NA BLOCKCHAIN ---
+// Busca cartas pertencentes ao jogador na blockchain
 async function handleGetPlayerCards(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
     nc.subscribe("internalServer.getCards", {
         async callback(err, msg) {
@@ -327,24 +343,21 @@ async function handleGetPlayerCards(nc: nats.NatsConnection, jc: nats.Codec<unkn
             console.log(`🔍 Buscando cartas na Blockchain para: ${address.substring(0,6)}...`);
 
             try {
-                // Estrutura do objeto na blockchain
                 const structType = `${PACKAGE_ID}::core::MonsterCard`;
 
                 const { data } = await client.getOwnedObjects({
                     owner: address,
                     filter: { StructType: structType },
                     options: { 
-                        showContent: true, // Importante para ler o valor (Força)
+                        showContent: true,
                         showType: true 
                     }
                 });
 
-                // Mapeia para um formato limpo {id, power}
                 const cards = data.map((obj: any) => {
                     const content = obj.data?.content as any;
                     return {
                         id: obj.data?.objectId,
-                        // O campo 'value' está dentro de fields no Move Struct
                         power: parseInt(content?.fields?.value || "0") 
                     };
                 });
@@ -360,6 +373,7 @@ async function handleGetPlayerCards(nc: nats.NatsConnection, jc: nats.Codec<unkn
     });
 }
 
+// Validação de ownership (quem é dono do objeto)
 async function handleValidateOwnership(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
     nc.subscribe("internalServer.validateOwnership", {
         async callback(err, msg) {
@@ -374,6 +388,7 @@ async function handleValidateOwnership(nc: nats.NatsConnection, jc: nats.Codec<u
     });
 }
 
+// Troca à Prova de Falhas (com retentativas)
 async function handleAtomicSwap(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
     nc.subscribe("internalServer.atomicSwap", {
         callback(err, msg) {
@@ -387,11 +402,9 @@ async function handleAtomicSwap(nc: nats.NatsConnection, jc: nats.Codec<unknown>
                     const signerA = Ed25519Keypair.fromSecretKey(req.userA_Secret);
                     const signerB = Ed25519Keypair.fromSecretKey(req.userB_Secret);
 
-                    // Garante gás para ambos (já que são 2 transações agora)
                     await ensureFunds(signerA.toIotaAddress(), client);
                     await ensureFunds(signerB.toIotaAddress(), client);
 
-                    // PASSO 1: A envia para B
                     console.log("   ➡️ Passo 1: A envia para B...");
                     const res1 = await executeWithRetry(client, signerA, () => {
                         const tx = new Transaction();
@@ -402,7 +415,6 @@ async function handleAtomicSwap(nc: nats.NatsConnection, jc: nats.Codec<unknown>
                         return tx;
                     }, "SwapStep1");
 
-                    // PASSO 2: B envia para A
                     console.log("   ⬅️ Passo 2: B envia para A...");
                     const res2 = await executeWithRetry(client, signerB, () => {
                         const tx = new Transaction();
@@ -413,18 +425,14 @@ async function handleAtomicSwap(nc: nats.NatsConnection, jc: nats.Codec<unknown>
                         return tx;
                     }, "SwapStep2");
 
-                    // Verifica se ambos deram certo
                     const digest1 = res1.digest;
                     const digest2 = res2.digest;
 
                     console.log(`   ✅ Troca Finalizada! Digests: ${digest1} | ${digest2}`);
-                    // Retorna o digest da segunda para confirmação
                     msg.respond(jc.encode({ ok: true, digest: digest2 }));
 
                 } catch (error: any) {
                     console.error("   ❌ Erro na Troca:", error.message || error);
-                    // Nota: Se falhar no passo 2, o passo 1 já ocorreu. 
-                    // Em um sistema real, teríamos um script de reembolso aqui.
                     msg.respond(jc.encode({ ok: false, error: "Falha na Troca (Parcial ou Total)" }));
                 }
             });
@@ -448,15 +456,14 @@ async function main() {
 
     console.log("🚀 Sistema Pronto (Com Leitura On-Chain).");
 
+    // Inicializa todos os handlers
     handleCreateWallet(nc, jc, client, adminKey);
     handleGetBalance(nc, jc, client); 
     handleTransaction(nc, jc, client);
     handleMintCard(nc, jc, client, adminKey);
     handleLogMatch(nc, jc, client, adminKey);
     handleTransferCard(nc, jc, client);
-    
-    // REGISTRO DE NOVOS HANDLERS
-    handleGetPlayerCards(nc, jc, client); // <--- AQUI
+    handleGetPlayerCards(nc, jc, client);
     handleValidateOwnership(nc, jc, client);
     handleAtomicSwap(nc, jc, client);
 }

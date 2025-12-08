@@ -15,12 +15,16 @@ import (
 
 // --- ESTRUTURAS ---
 
+// IdManager controla IDs de jogadores e armazena seus dados.
+// Usa mutex para permitir acesso concorrente seguro.
 type IdManager struct {
 	Mutex     sync.RWMutex
 	Count     int
 	ClientMap map[int]*Player
 }
 
+// Estrutura básica que representa uma partida ativa.
+// Usada para registrar jogadores, cartas enviadas e o ID único da partida.
 type matchStruct struct {
 	SelfId string `json:"self_id"`
 	P1     int    `json:"p1"`
@@ -29,36 +33,48 @@ type matchStruct struct {
 	Card2  int    `json:"card2"`
 }
 
+// Representa um jogador do servidor: ID, carteira blockchain e suas cartas.
+// O mapa Cards armazena "ObjectID da blockchain → poder da carta".
 type Player struct {
 	Id     int
 	Wallet Wallet
-	// CORREÇÃO: Usando mapa para vincular ID da Blockchain (Key) ao Poder da Carta (Value)
 	Cards  map[string]int 
 }
 
+// Armazena todos os pacotes de cartas que podem ser sorteados ao abrir packs.
 type PackStorage struct {
 	Mutex sync.Mutex
 	Cards [][3]int
 }
 
-// NOVA ESTRUTURA PARA TROCA P2P
+// Estrutura usada no sistema de troca cega (Blind Trade).
+// Guarda quem propôs, quem recebe, as cartas e a data da proposta.
 type TradeProposal struct {
 	ProposerID   int
 	TargetID     int
-	ProposerCard string // ID do Objeto na IOTA (Hex String)
-	TargetCard   string // ID do Objeto na IOTA (Hex String)
+	ProposerCard string
+	TargetCard   string
 	CreatedAt    time.Time
 }
 
 // --- VARIÁVEIS GLOBAIS ---
+
+// Gerenciador de IDs de jogadores
 var IM = IdManager{Count: 0, ClientMap: map[int]*Player{}}
+
+// Armazena todos os packs já pré-gerados
 var STO = PackStorage{Cards: setupPacks(900)}
+
+// Endereço da carteira da loja (carregado via .env)
 var ServerWalletAddress string
 
 // --- FUNÇÃO INIT ---
 func init() {
+	// Carrega variáveis do .env usadas pela blockchain
 	godotenv.Load("../blockchain_server/.env")
 	ServerWalletAddress = os.Getenv("ADDRESS")
+
+	// Mensagem de aviso caso o .env não contenha a carteira
 	if ServerWalletAddress == "" {
 		log.Println("⚠️ AVISO: Endereço da carteira não encontrado no .env")
 	} else {
@@ -67,6 +83,9 @@ func init() {
 }
 
 // --- CONFIGURAÇÃO DE PACOTES ---
+
+// Gera uma lista de N cartas numeradas e divide em pacotes de 3.
+// Cada pack contém 3 IDs consecutivos, usados ao abrir pacotes.
 func setupPacks(N int) [][3]int {
 	arr := make([]int, N)
 	for i := range N {
@@ -74,6 +93,7 @@ func setupPacks(N int) [][3]int {
 	}
 	numPacks := (N + 3 - 1) / 3
 	packs := make([][3]int, numPacks)
+
 	for i := range numPacks {
 		start := i * 3
 		end := start + 3
@@ -86,6 +106,8 @@ func setupPacks(N int) [][3]int {
 
 // --- STORE METHODS ---
 
+// Cria um novo jogador no sistema, gera uma carteira blockchain
+// e armazena tudo na Store.
 func (s *Store) CreatePlayer(nc *nats.Conn) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -94,7 +116,7 @@ func (s *Store) CreatePlayer(nc *nats.Conn) (int, error) {
 	newPlayer := Player{
 		Id:     s.count,
 		Wallet: RequestCreateWallet(nc),
-		Cards:  make(map[string]int), // Inicializa o mapa vazio
+		Cards:  make(map[string]int),
 	}
 
 	s.players[newPlayer.Id] = newPlayer
@@ -103,6 +125,11 @@ func (s *Store) CreatePlayer(nc *nats.Conn) (int, error) {
 	return newPlayer.Id, nil
 }
 
+// Abre um pacote de 3 cartas:
+// 1) cobra o jogador via blockchain,
+// 2) sorteia um pack,
+// 3) mint das cartas na blockchain,
+// 4) salva as cartas no cache local do jogador.
 func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 	s.mu.Lock()
 	player, exists := s.players[id]
@@ -112,7 +139,7 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 		return nil, fmt.Errorf("player not found")
 	}
 
-	// 1. COBRANÇA (IOTA)
+	// --- ETAPA 1: Cobrança blockchain ---
 	serverWallet := Wallet{Address: ServerWalletAddress}
 
 	fmt.Printf("💰 Cobrando 1000 IOTA de %d...\n", id)
@@ -122,7 +149,7 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 		return nil, fmt.Errorf("saldo insuficiente ou erro na transação")
 	}
 
-	// 2. SORTEIO
+	// --- ETAPA 2: Sorteio aleatório de pack ---
 	s.mu.Lock()
 	if len(s.Cards) == 0 {
 		s.mu.Unlock()
@@ -137,14 +164,12 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 	s.Cards = s.Cards[:lastIndex]
 	s.mu.Unlock()
 
-	// 3. MINT NA BLOCKCHAIN
+	// --- ETAPA 3: Mint das cartas ---
 	fmt.Println("⚡ Minting cards on blockchain...")
 	
-	// Mapa temporário para armazenar as novas cartas
 	newCards := make(map[string]int)
 
 	for _, cardVal := range pack {
-		// CORREÇÃO: Recebe Digest e ObjectID
 		digest, objectId, err := RequestMintCard(nc, player.Wallet.Address, cardVal)
 		
 		if err != nil {
@@ -157,10 +182,9 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 		}
 	}
 
-	// 4. ATUALIZAÇÃO LOCAL
+	// --- ETAPA 4: Atualiza cache local do jogador ---
 	s.mu.Lock()
 	p := s.players[id]
-	// Adiciona as novas cartas ao mapa do jogador
 	for k, v := range newCards {
 		p.Cards[k] = v
 	}
@@ -170,8 +194,9 @@ func (s *Store) OpenPack(nc *nats.Conn, id int) (*[3]int, error) {
 	return &pack, nil
 }
 
-// --- LÓGICA DE TROCA SEGURA (BLIND TRADE) ---
-
+// --- LÓGICA DE TROCA CEGRA (BLIND TRADE) ---
+// Jogador entra na fila de troca: valida propriedade via blockchain,
+// remove a carta do cache, e aguarda Pareamento.
 func (s *Store) JoinBlindTrade(nc *nats.Conn, playerID int, cardHex string) error {
 	s.mu.Lock()
 	player, exists := s.players[playerID]
@@ -181,20 +206,19 @@ func (s *Store) JoinBlindTrade(nc *nats.Conn, playerID int, cardHex string) erro
 		return fmt.Errorf("jogador não encontrado")
 	}
 	
-	// 0. Validação Local: Verifica se o jogador possui a carta no cache local
+	// Verifica se a carta está no cache (só aviso; validação real é blockchain)
 	if _, hasLocal := player.Cards[cardHex]; !hasLocal {
-		// Aviso apenas, a validação real é na blockchain
 		fmt.Println("⚠️ Carta não encontrada no cache local (pode ser nova), verificando blockchain...")
 	}
 
-	// 1. Validação Blockchain
 	fmt.Printf("🔍 [BlindTrade] Validando propriedade: %s tem %s?\n", player.Wallet.Address, cardHex)
 	owns := RequestValidateOwnership(nc, player.Wallet.Address, cardHex)
+
 	if !owns {
 		return fmt.Errorf("você não é dono desta carta na blockchain")
 	}
 
-	// 2. Adiciona à fila
+	// Cria requisição
 	req := BlindTradeRequest{
 		PlayerID: playerID,
 		CardHex:  cardHex,
@@ -208,8 +232,8 @@ func (s *Store) JoinBlindTrade(nc *nats.Conn, playerID int, cardHex string) erro
 			return fmt.Errorf("você já está na fila de troca")
 		}
 	}
-	
-	// Remove a carta do cache local para evitar uso duplo
+
+	// Remove carta para impedir reutilização
 	delete(s.players[playerID].Cards, cardHex)
 
 	s.BlindTradeQueue = append(s.BlindTradeQueue, req)
@@ -223,6 +247,8 @@ func (s *Store) JoinBlindTrade(nc *nats.Conn, playerID int, cardHex string) erro
 	return nil
 }
 
+// Processa pares da fila de forma FIFO, realiza Atomic Swap
+// e envia resposta individual para cada jogador via NATS.
 func (s *Store) ProcessBlindQueue(nc *nats.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -245,14 +271,10 @@ func (s *Store) ProcessBlindQueue(nc *nats.Conn) {
 			msgA = fmt.Sprintf(`{"status": "error", "msg": "Falha na blockchain: %v"}`, err)
 			msgB = msgA
 			fmt.Println("❌ Falha no BlindTrade:", err)
-			// Idealmente devolveria as cartas ao cache, mas simplificado aqui
 		} else {
 			msgA = fmt.Sprintf(`{"status": "success", "received_card": "%s"}`, userB.CardHex)
 			msgB = fmt.Sprintf(`{"status": "success", "received_card": "%s"}`, userA.CardHex)
 			fmt.Println("✅ BlindTrade Concluído!")
-			
-			// Nota: Atualizar o cache local exigiria saber o VALOR da carta recebida.
-			// Como o swap é cego, o cliente terá que dar refresh (Ver Cartas) para atualizar.
 		}
 
 		nc.Publish(fmt.Sprintf("trade.result.%d", userA.PlayerID), []byte(msgA))
@@ -262,6 +284,7 @@ func (s *Store) ProcessBlindQueue(nc *nats.Conn) {
 
 // --- GAME LOGIC ---
 
+// Coloca jogador na fila de matchmaking
 func (s *Store) JoinQueue(id int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,6 +292,8 @@ func (s *Store) JoinQueue(id int) (int, error) {
 	return id, nil
 }
 
+// Cria uma partida quando houver ao menos 2 jogadores na fila.
+// Gera UUID como ID da partida e registra no histórico.
 func (s *Store) CreateMatch() (matchStruct, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -292,13 +317,15 @@ func (s *Store) CreateMatch() (matchStruct, error) {
 	return x, nil
 }
 
+// Registra a carta jogada pelo jogador e, quando ambas estiverem presentes,
+// chama ResolveMatch para decidir o vencedor.
 func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) (Player, int, Player, int, string, error) {
 	s.mu.Lock()
 
 	game, exists := s.matchHistory[gameId]
 	if !exists { return Player{}, 0, Player{}, 0, "", fmt.Errorf("game not found") }
 
-	// CORREÇÃO: Verifica se o jogador possui uma carta com esse VALOR no mapa
+	// Verifica se jogador realmente tem carta com o valor informado
 	player := s.players[id]
 	hasCard := false
 	
@@ -314,6 +341,7 @@ func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) (Pla
 		return Player{}, 0, Player{}, 0, "", fmt.Errorf("player does not have card with value %d", cardVal)
 	}
 
+	// Salva a jogada na estrutura da partida
 	if game.P1 == id {
 		game.Card1 = cardVal
 	} else if game.P2 == id {
@@ -328,6 +356,7 @@ func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) (Pla
 	
 	s.mu.Unlock()
 
+	// Se ambos jogaram, resolve partida
 	if game.Card1 != 0 && game.Card2 != 0 {
 		fmt.Println("Resolving Game")
 		return s.ResolveMatch(nc, game)
@@ -336,6 +365,8 @@ func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) (Pla
 	return Player{}, 0, Player{}, 0, "", fmt.Errorf("just one player")
 }
 
+// Compara valores das cartas, define vencedor, cria log da partida
+// na blockchain e retorna resultado para o servidor de jogo.
 func (s *Store) ResolveMatch(nc *nats.Conn, game matchStruct) (Player, int, Player, int, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
