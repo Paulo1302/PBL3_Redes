@@ -17,13 +17,18 @@ func SetupPS(s *Store) {
 		return
 	}
 
+	// --- CORREÇÃO CRÍTICA AQUI ---
 	go func() {
 		for {
 			htb := map[string]int64{"server_ping": time.Now().UnixMilli()}
 			htb_json, _ := json.Marshal(htb)
 			nc.Publish("topic.heartbeat", htb_json)
+			
+			// PAUSA DE 1 SEGUNDO (EVITA O ERRO SLOW CONSUMER)
+			time.Sleep(1 * time.Second) 
 		}
 	}()
+	// -----------------------------
 
 	ReplyPing(nc)
 	CreateAccount(nc, s)
@@ -32,16 +37,14 @@ func SetupPS(s *Store) {
 	ClientSeeCards(nc, s)
 	ClientJoinGameQueue(nc, s)
 	ClientPlayCards(nc, s)
-	ClientJoinTradeQueue(nc, s)
+	ClientJoinBlindTrade(nc, s)
 }
 
 func ReplyPing(nc *nats.Conn) {
 	nc.Subscribe("topic.ping", func(m *nats.Msg) {
 		var payload map[string]any
 		json.Unmarshal(m.Data, &payload)
-
 		payload["server_ping"] = time.Now().UnixMilli()
-
 		data, _ := json.Marshal(payload)
 		nc.Publish(m.Reply, data)
 	})
@@ -52,7 +55,6 @@ func BrokerConnect() (*nats.Conn, error) {
 	if url == "" {
 		url = "nats://localhost:4222"
 	}
-
 	opts := []nats.Option{
 		nats.Name("Central-Server"),
 		nats.Timeout(10 * time.Second),
@@ -65,7 +67,6 @@ func BrokerConnect() (*nats.Conn, error) {
 func CreateAccount(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.createAccount", func(m *nats.Msg) {
 		playerID, err := s.CreatePlayer(nc)
-		
 		if err != nil {
 			nc.Publish(m.Reply, []byte(`{"err":"ERROR_CREATING"}`))
 			return
@@ -77,7 +78,7 @@ func CreateAccount(nc *nats.Conn, s *Store) {
 		}
 		data, _ := json.Marshal(payload)
 		nc.Publish(m.Reply, data)
-		fmt.Println("user id: ",playerID)
+		fmt.Println("user id: ", playerID)
 	})
 }
 
@@ -85,24 +86,18 @@ func ClientLogin(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.login", func(msg *nats.Msg) {
 		var payload map[string]any
 		json.Unmarshal(msg.Data, &payload)
-
 		s.mu.Lock()
 		maxCount := s.count
-		id:=int(payload["client_id"].(float64))
+		id := int(payload["client_id"].(float64))
 		_, exists := s.players[id]
 		s.mu.Unlock()
-
 		if id > maxCount || !exists {
 			payload["err"] = "user not found"
 			data, _ := json.Marshal(payload)
 			nc.Publish(msg.Reply, data)
 			return
 		}
-
-		resp := map[string]any{
-			"result":    true,
-			"client_id": id,
-		}
+		resp := map[string]any{"result": true, "client_id": id}
 		data, _ := json.Marshal(resp)
 		nc.Publish(msg.Reply, data)
 	})
@@ -112,16 +107,13 @@ func ClientOpenPack(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.openPack", func(m *nats.Msg) {
 		var payload map[string]any
 		json.Unmarshal(m.Data, &payload)
-
 		cards, err := s.OpenPack(nc, int(payload["client_id"].(float64)))
-		
 		if err != nil {
 			resp := map[string]any{"err": err.Error()}
 			data, _ := json.Marshal(resp)
 			nc.Publish(m.Reply, data)
 			return
 		}
-
 		response := map[string]any{
 			"status":    "Pack opened",
 			"result":    *cards,
@@ -137,17 +129,39 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 		var payload map[string]any
 		json.Unmarshal(m.Data, &payload)
 		clientID := int(payload["client_id"].(float64))
-
+		
 		s.mu.Lock()
 		player, exists := s.players[clientID]
 		s.mu.Unlock()
+		
 		if !exists {
 			nc.Publish(m.Reply, []byte(`{"err":"player not found"}`))
 			return
 		}
 
+		fmt.Printf("🌐 Consultando cartas on-chain para Jogador %d (%s)...\n", clientID, player.Wallet.Address)
+		chainCards, err := RequestGetCardsFromChain(nc, player.Wallet.Address)
+		
+		if err != nil {
+			errMsg := fmt.Sprintf(`{"err":"Falha ao consultar blockchain: %v"}`, err)
+			nc.Publish(m.Reply, []byte(errMsg))
+			return
+		}
+
+		s.mu.Lock()
+		p, ok := s.players[clientID]
+		if ok {
+			newMap := make(map[string]int)
+			for _, c := range chainCards {
+				newMap[c.ID] = c.Power
+			}
+			p.Cards = newMap
+			s.players[clientID] = p
+		}
+		s.mu.Unlock()
+
 		resp := map[string]any{
-			"result":    player.Cards,
+			"result":    chainCards, 
 			"is_leader": true,
 		}
 		data, _ := json.Marshal(resp)
@@ -159,13 +173,11 @@ func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.findMatch", func(m *nats.Msg) {
 		var payload map[string]any
 		json.Unmarshal(m.Data, &payload)
-
 		_, err := s.JoinQueue(int(payload["client_id"].(float64)))
 		if err != nil {
 			nc.Publish(m.Reply, []byte(`{"err":"ERROR_JOINING"}`))
 			return
 		}
-
 		respPayload := map[string]any{"status": "Added to queue", "is_leader": true}
 		data, _ := json.Marshal(respPayload)
 		nc.Publish(m.Reply, data)
@@ -175,18 +187,12 @@ func ClientJoinGameQueue(nc *nats.Conn, s *Store) {
 			fmt.Println("Match not started.")
 			return
 		}
-
 		fmt.Println("Match started:", match.SelfId)
 		for _, p := range []int{match.P1, match.P2} {
-			resp := map[string]any{
-				"client_id": p,
-				"match":     match,
-			}
-			fmt.Println(resp)
+			resp := map[string]any{"client_id": p, "match": match}
 			data, _ = json.Marshal(resp)
 			nc.Publish("topic.matchmaking", data)
 		}
-
 	})
 }
 
@@ -200,37 +206,28 @@ func SendingGameResult(payload map[string]any, nc *nats.Conn) {
 
 func ClientPlayCards(nc *nats.Conn, s *Store) {
 	nc.Subscribe("game.client", func(m *nats.Msg) {
-		fmt.Println("REQUEST PLAY CARDS")
-
 		var payload map[string]any
 		if err := json.Unmarshal(m.Data, &payload); err != nil {
 			log.Println("Error unmarshalling payload:", err)
 			return
 		}
-
 		gameID := payload["game"].(string)
 		clientID := int(payload["client_id"].(float64))
 		card := int(payload["card"].(float64))
 
-		// CORREÇÃO: Passando 'nc' como primeiro argumento
 		err := s.PlayCard(nc, gameID, clientID, card)
 		if err != nil {
 			log.Println("Error executing PlayCard:", err)
 			return
 		}
-
 		s.mu.Lock()
 		match, exists := s.matchHistory[gameID]
 		s.mu.Unlock()
-
 		if !exists { return }
 
-		// Se ambos jogaram, o PlayCard já chamou ResolveMatch e logou na blockchain.
-		// Agora só precisamos avisar os frontends quem ganhou.
 		if match.Card1 != 0 && match.Card2 != 0 {
 			var response1 map[string]any
 			var response2 map[string]any
-
 			if match.Card1 > match.Card2 {
 				response1 = map[string]any{"client_id": match.P1, "result": "win", "card": match.Card2}
 				response2 = map[string]any{"client_id": match.P2, "result": "lose", "card": match.Card1}
@@ -238,55 +235,34 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 				response1 = map[string]any{"client_id": match.P1, "result": "lose", "card": match.Card2}
 				response2 = map[string]any{"client_id": match.P2, "result": "win", "card": match.Card1}
 			} else {
-				// Empate
 				response1 = map[string]any{"client_id": match.P1, "result": "draw", "card": match.Card2}
 				response2 = map[string]any{"client_id": match.P2, "result": "draw", "card": match.Card1}
 			}
-
 			SendingGameResult(response1, nc)
 			SendingGameResult(response2, nc)
 		}
 	})
 }
 
-func publishTrade(nc *nats.Conn, p1 int, card int) {
-	resp := map[string]any{
-		"client_id": p1,
-		"return_card": card,
-	}
-	fmt.Println(resp)
-	data, _ := json.Marshal(resp)
-	nc.Publish("topic.listenTrade", data)
-}
-
-func ClientJoinTradeQueue(nc *nats.Conn, s *Store) {
-	nc.Subscribe("topic.sendTrade", func(m *nats.Msg) {
+func ClientJoinBlindTrade(nc *nats.Conn, s *Store) {
+	nc.Subscribe("topic.trade.joinBlind", func(m *nats.Msg) {
 		var payload map[string]any
-		json.Unmarshal(m.Data, &payload)
+		if err := json.Unmarshal(m.Data, &payload); err != nil {
+			nc.Publish(m.Reply, []byte(`{"err":"invalid payload"}`))
+			return
+		}
 
-		t, err := s.JoinTradeQueue(int(payload["client_id"].(float64)), int(payload["card"].(float64)))
+		clientID := int(payload["client_id"].(float64))
+		cardHex := payload["card_id"].(string)
+
+		err := s.JoinBlindTrade(nc, clientID, cardHex)
 		
 		if err != nil {
-			fmt.Println("teste:", t)
-			nc.Publish(m.Reply, []byte(`{"err":"ERROR_JOINING"}`))
-			return
+			resp := map[string]any{"err": err.Error()}
+			data, _ := json.Marshal(resp)
+			nc.Publish(m.Reply, data)
+		} else {
+			nc.Publish(m.Reply, []byte(`{"status":"queued", "msg":"Você está na fila. Aguarde notificação."}`))
 		}
-
-		respPayload := map[string]any{"status": "Added to queue", "is_leader": true}
-		data, _ := json.Marshal(respPayload)
-		nc.Publish(m.Reply, data)
-
-		trade, err := s.CreateTrade()
-
-		if err != nil {
-			fmt.Println(err)
-			fmt.Println("Match not started.")
-			return
-		}
-
-		fmt.Println("Trade started:", trade.SelfId)
-		publishTrade(nc, trade.P1, trade.Card2)
-		publishTrade(nc, trade.P2, trade.Card1)
-
 	})
 }

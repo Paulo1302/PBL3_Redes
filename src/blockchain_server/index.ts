@@ -33,6 +33,36 @@ async function getBalance(addr: string, client: IotaClient) {
     } catch(e) { return 0; }
 }
 
+async function ensureFunds(address: string, client: IotaClient) {
+    let balance = await getBalance(address, client);
+    if (balance < 500_000_000) {
+        console.log(`📉 Saldo baixo para operar (${balance}). Tentando Faucet...`);
+        try {
+            await requestIotaFromFaucetV0({ host: FAUCET_URL, recipient: address });
+            await new Promise(r => setTimeout(r, 2000));
+        } catch (e) {
+            console.warn("⚠️ Falha ao pedir gás extra (pode ser ignorado se for Tesouraria).");
+        }
+    }
+}
+
+async function verifyOwnership(client: IotaClient, address: string, objectId: string): Promise<boolean> {
+    try {
+        const { data } = await client.getObject({ 
+            id: objectId, 
+            options: { showOwner: true } 
+        });
+        
+        if (!data || !data.owner) return false;
+        
+        const ownerJson = data.owner as any;
+        return ownerJson && ownerJson.AddressOwner === address;
+    } catch (e) {
+        console.error("Erro na validação de propriedade:", e);
+        return false;
+    }
+}
+
 async function forceTreasuryRefill(address: string, client: IotaClient) {
     let balance = await getBalance(address, client);
     console.log(`🏦 Saldo Admin Atual: ${balance}`);
@@ -52,7 +82,7 @@ async function transferFunds(signer: Ed25519Keypair, dest: string, amount: numbe
     return client.signAndExecuteTransaction({ signer, transaction: tx });
 }
 
-// --- EXECUÇÃO COM RETENTATIVA (CORRIGIDA) ---
+// --- EXECUÇÃO COM RETENTATIVA ---
 async function executeWithRetry(
     client: IotaClient, 
     signer: Ed25519Keypair, 
@@ -65,41 +95,37 @@ async function executeWithRetry(
     while (attempts < MAX_ATTEMPTS) {
         try {
             if (attempts > 0) {
-                // Backoff exponencial para dar tempo à rede
                 const waitTime = attempts * 1000;
                 console.log(`   ⚠️ Retentativa ${attempts}/${MAX_ATTEMPTS} para ${label} em ${waitTime}ms...`);
-                
-                // Tenta forçar atualização de cache lendo o objeto
                 try { await client.getObject({ id: ADMIN_CAP_ID }); } catch(e) {}
                 await new Promise(r => setTimeout(r, waitTime)); 
             }
 
             const tx = buildTx();
-
             const res = await client.signAndExecuteTransaction({
                 signer: signer,
                 transaction: tx,
-                options: { showEffects: true }
+                // CORREÇÃO: showObjectChanges: true é essencial para receber o ID
+                options: { 
+                    showEffects: true,
+                    showObjectChanges: true 
+                }
             });
 
             if (res.effects?.status.status === 'failure') {
                 throw new Error(`Falha na execução: ${res.effects.status.error}`);
             }
-
             return res; 
 
         } catch (error: any) {
-            const msg = (error?.message || JSON.stringify(error)).toLowerCase(); // Converte para minúsculo para facilitar busca
-            
-            // --- CORREÇÃO AQUI ---
-            // Adicionei "could not find" e "transaction inputs" à lista de erros perdoáveis
+            const msg = (error?.message || JSON.stringify(error)).toLowerCase();
             const isRetriable = 
                 msg.includes("not available") || 
                 msg.includes("locked") || 
                 msg.includes("version") || 
                 msg.includes("notfound") || 
-                msg.includes("could not find") ||  // <--- ESSA ERA A FALTA
-                msg.includes("transaction inputs"); // <--- PEGA ERROS GENÉRICOS DE INPUT
+                msg.includes("could not find") ||
+                msg.includes("transaction inputs");
 
             if (isRetriable) {
                 attempts++;
@@ -198,7 +224,6 @@ async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
         callback(err, msg) {
             if (err) return;
             
-            // FILA + RESPIRO
             adminQueue = adminQueue.then(async () => {
                 const req = jc.decode(msg.data) as any;
                 console.log(`📦 Mintando carta ${req.value}...`);
@@ -213,15 +238,23 @@ async function handleMintCard(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
                         return tx;
                     }, "MintCard");
 
-                    console.log(`   ✅ Mint OK: ${res.digest}`);
-                    msg.respond(jc.encode({ ok: true, digest: res.digest }));
+                    // Cast 'as any' para evitar erro de TS
+                    let createdId = "";
+                    if (res.objectChanges) {
+                        const created = res.objectChanges.find((o: any) => o.type === 'created');
+                        if (created) {
+                            createdId = (created as any).objectId;
+                        }
+                    }
+
+                    console.log(`   ✅ Mint OK: ${createdId} (Digest: ${res.digest})`);
+                    msg.respond(jc.encode({ ok: true, digest: res.digest, objectId: createdId }));
 
                 } catch (error: any) {
                     console.error("   ❌ Erro Fatal Mint:", error.message);
                     msg.respond(jc.encode({ ok: false }));
                 }
             })
-            // Respiro entre operações da fila
             .then(() => new Promise(r => setTimeout(r, 1000)));
         }
     });
@@ -276,6 +309,123 @@ async function handleTransferCard(nc: nats.NatsConnection, jc: nats.Codec<unknow
     });
 }
 
+// --- HANDLER NOVO: BUSCAR CARTAS NA BLOCKCHAIN ---
+async function handleGetPlayerCards(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
+    nc.subscribe("internalServer.getCards", {
+        async callback(err, msg) {
+            if (err) return;
+            const req = jc.decode(msg.data) as any;
+            const address = req.address;
+
+            console.log(`🔍 Buscando cartas na Blockchain para: ${address.substring(0,6)}...`);
+
+            try {
+                // Estrutura do objeto na blockchain
+                const structType = `${PACKAGE_ID}::core::MonsterCard`;
+
+                const { data } = await client.getOwnedObjects({
+                    owner: address,
+                    filter: { StructType: structType },
+                    options: { 
+                        showContent: true, // Importante para ler o valor (Força)
+                        showType: true 
+                    }
+                });
+
+                // Mapeia para um formato limpo {id, power}
+                const cards = data.map((obj: any) => {
+                    const content = obj.data?.content as any;
+                    return {
+                        id: obj.data?.objectId,
+                        // O campo 'value' está dentro de fields no Move Struct
+                        power: parseInt(content?.fields?.value || "0") 
+                    };
+                });
+
+                console.log(`   ✅ Encontradas ${cards.length} cartas.`);
+                msg.respond(jc.encode({ ok: true, cards: cards }));
+
+            } catch (error: any) {
+                console.error("   ❌ Erro ao buscar cartas:", error);
+                msg.respond(jc.encode({ ok: false, error: error.message }));
+            }
+        }
+    });
+}
+
+async function handleValidateOwnership(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
+    nc.subscribe("internalServer.validateOwnership", {
+        async callback(err, msg) {
+            if (err) return;
+            const req = jc.decode(msg.data) as any;
+            
+            console.log(`🔍 Validando se ${req.address} possui ${req.objectId}...`);
+            const owns = await verifyOwnership(client, req.address, req.objectId);
+            
+            msg.respond(jc.encode({ ok: owns }));
+        }
+    });
+}
+
+async function handleAtomicSwap(nc: nats.NatsConnection, jc: nats.Codec<unknown>, client: IotaClient) {
+    nc.subscribe("internalServer.atomicSwap", {
+        callback(err, msg) {
+            if (err) return;
+
+            adminQueue = adminQueue.then(async () => {
+                const req = jc.decode(msg.data) as any;
+                console.log(`🤝 Executando Troca: ${req.userA_Addr} <-> ${req.userB_Addr}`);
+
+                try {
+                    const signerA = Ed25519Keypair.fromSecretKey(req.userA_Secret);
+                    const signerB = Ed25519Keypair.fromSecretKey(req.userB_Secret);
+
+                    // Garante gás para ambos (já que são 2 transações agora)
+                    await ensureFunds(signerA.toIotaAddress(), client);
+                    await ensureFunds(signerB.toIotaAddress(), client);
+
+                    // PASSO 1: A envia para B
+                    console.log("   ➡️ Passo 1: A envia para B...");
+                    const res1 = await executeWithRetry(client, signerA, () => {
+                        const tx = new Transaction();
+                        tx.moveCall({
+                            target: `${PACKAGE_ID}::core::transfer_card`,
+                            arguments: [ tx.object(req.cardA_ID), tx.pure.address(req.userB_Addr) ]
+                        });
+                        return tx;
+                    }, "SwapStep1");
+
+                    // PASSO 2: B envia para A
+                    console.log("   ⬅️ Passo 2: B envia para A...");
+                    const res2 = await executeWithRetry(client, signerB, () => {
+                        const tx = new Transaction();
+                        tx.moveCall({
+                            target: `${PACKAGE_ID}::core::transfer_card`,
+                            arguments: [ tx.object(req.cardB_ID), tx.pure.address(req.userA_Addr) ]
+                        });
+                        return tx;
+                    }, "SwapStep2");
+
+                    // Verifica se ambos deram certo
+                    const digest1 = res1.digest;
+                    const digest2 = res2.digest;
+
+                    console.log(`   ✅ Troca Finalizada! Digests: ${digest1} | ${digest2}`);
+                    // Retorna o digest da segunda para confirmação
+                    msg.respond(jc.encode({ ok: true, digest: digest2 }));
+
+                } catch (error: any) {
+                    console.error("   ❌ Erro na Troca:", error.message || error);
+                    // Nota: Se falhar no passo 2, o passo 1 já ocorreu. 
+                    // Em um sistema real, teríamos um script de reembolso aqui.
+                    msg.respond(jc.encode({ ok: false, error: "Falha na Troca (Parcial ou Total)" }));
+                }
+            });
+        }
+    });
+}
+
+// --- MAIN ---
 async function main() {
     if (!PACKAGE_ID || !ADMIN_SECRET) {
         console.error("❌ ERRO: .env incompleto.");
@@ -289,7 +439,7 @@ async function main() {
     console.log(`👑 Admin Iniciado: ${adminKey.toIotaAddress()}`);
     await forceTreasuryRefill(adminKey.toIotaAddress(), client);
 
-    console.log("🚀 Sistema Pronto (Alta Persistência 2.0).");
+    console.log("🚀 Sistema Pronto (Com Leitura On-Chain).");
 
     handleCreateWallet(nc, jc, client, adminKey);
     handleGetBalance(nc, jc, client); 
@@ -297,6 +447,11 @@ async function main() {
     handleMintCard(nc, jc, client, adminKey);
     handleLogMatch(nc, jc, client, adminKey);
     handleTransferCard(nc, jc, client);
+    
+    // REGISTRO DE NOVOS HANDLERS
+    handleGetPlayerCards(nc, jc, client); // <--- AQUI
+    handleValidateOwnership(nc, jc, client);
+    handleAtomicSwap(nc, jc, client);
 }
 
 main().catch(console.error);
