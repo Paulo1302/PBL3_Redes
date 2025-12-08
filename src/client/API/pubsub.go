@@ -281,7 +281,7 @@ func SendCards(nc *nats.Conn, id int, card int, game string) {
 	nc.Publish("game.client", data)
 }
 
-func ManageGame2(nc *nats.Conn, id *int, card chan int, roundResult chan string) {
+func ManageGame2(nc *nats.Conn, id *int, card chan int, roundResult chan string, object chan string) {
 	nc.Subscribe("game.server", func(msg *nats.Msg) {
 		var payload map[string]any
 		json.Unmarshal(msg.Data, &payload)
@@ -298,19 +298,9 @@ func ManageGame2(nc *nats.Conn, id *int, card chan int, roundResult chan string)
 		pID, _ := payload["client_id"].(float64)
 		if int(pID) != currId { return }
 
-		res := payload["result"].(string)
-		cardVal, _ := payload["card"].(float64)
-
-		if res == "win" {
-			card <- int(cardVal)
-			roundResult <- "win"
-		} else if res == "lose" {
-			card <- int(cardVal)
-			roundResult <- "lose"
-		} else if res == "draw" {
-			card <- int(cardVal)
-			roundResult <- "draw"
-		}
+		card <- int(payload["card"].(float64))
+		roundResult <- payload["result"].(string)
+		object <- payload["object"].(string)
 	})
 }
 

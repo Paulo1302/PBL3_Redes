@@ -223,32 +223,20 @@ func ClientPlayCards(nc *nats.Conn, s *Store) {
 		clientID := int(payload["client_id"].(float64))
 		card := int(payload["card"].(float64))
 
-		err := s.PlayCard(nc, gameID, clientID, card)
+		pWin, cardWin, pLose, cardLose, objectId, err := s.PlayCard(nc, gameID, clientID, card)
 		if err != nil {
 			log.Println("Error executing PlayCard:", err)
 			return
 		}
-		s.mu.Lock()
-		match, exists := s.matchHistory[gameID]
-		s.mu.Unlock()
-		if !exists { return }
-
-		if match.Card1 != 0 && match.Card2 != 0 {
-			var response1 map[string]any
-			var response2 map[string]any
-			if match.Card1 > match.Card2 {
-				response1 = map[string]any{"client_id": match.P1, "result": "win", "card": match.Card2}
-				response2 = map[string]any{"client_id": match.P2, "result": "lose", "card": match.Card1}
-			} else if match.Card2 > match.Card1 {
-				response1 = map[string]any{"client_id": match.P1, "result": "lose", "card": match.Card2}
-				response2 = map[string]any{"client_id": match.P2, "result": "win", "card": match.Card1}
-			} else {
-				response1 = map[string]any{"client_id": match.P1, "result": "draw", "card": match.Card2}
-				response2 = map[string]any{"client_id": match.P2, "result": "draw", "card": match.Card1}
-			}
-			SendingGameResult(response1, nc)
-			SendingGameResult(response2, nc)
-		}
+		
+		var response1 map[string]any
+		var response2 map[string]any
+		response1 = map[string]any{"client_id": pWin.Id, "result": "win", "card": cardLose, "object": objectId}
+		response2 = map[string]any{"client_id": pLose.Id, "result": "lose", "card": cardWin, "object": objectId}
+		
+		SendingGameResult(response1, nc)
+		SendingGameResult(response2, nc)
+		
 	})
 }
 

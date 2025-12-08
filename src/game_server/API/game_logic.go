@@ -292,12 +292,11 @@ func (s *Store) CreateMatch() (matchStruct, error) {
 	return x, nil
 }
 
-func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) error {
+func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) (Player, int, Player, int, string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	game, exists := s.matchHistory[gameId]
-	if !exists { return fmt.Errorf("game not found") }
+	if !exists { return Player{}, 0, Player{}, 0, "", fmt.Errorf("game not found") }
 
 	// CORREÇÃO: Verifica se o jogador possui uma carta com esse VALOR no mapa
 	player := s.players[id]
@@ -311,7 +310,8 @@ func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) erro
 	}
 
 	if !hasCard {
-		return fmt.Errorf("player does not have card with value %d", cardVal)
+		s.mu.Unlock()
+		return Player{}, 0, Player{}, 0, "", fmt.Errorf("player does not have card with value %d", cardVal)
 	}
 
 	if game.P1 == id {
@@ -319,25 +319,26 @@ func (s *Store) PlayCard(nc *nats.Conn, gameId string, id int, cardVal int) erro
 	} else if game.P2 == id {
 		game.Card2 = cardVal
 	} else {
-		return fmt.Errorf("player not in match")
+		s.mu.Unlock()
+		return Player{}, 0, Player{}, 0, "", fmt.Errorf("player not in match")
 	}
 
 	s.matchHistory[gameId] = game
 	fmt.Println("[Central] Card Played:", cardVal, "in game", gameId)
+	
+	s.mu.Unlock()
 
 	if game.Card1 != 0 && game.Card2 != 0 {
-		go s.ResolveMatch(nc, gameId)
+		fmt.Println("Resolving Game")
+		return s.ResolveMatch(nc, game)
 	}
 
-	return nil
+	return Player{}, 0, Player{}, 0, "", fmt.Errorf("just one player")
 }
 
-func (s *Store) ResolveMatch(nc *nats.Conn, gameId string) {
+func (s *Store) ResolveMatch(nc *nats.Conn, game matchStruct) (Player, int, Player, int, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	game, exists := s.matchHistory[gameId]
-	if !exists { return }
 
 	var winnerID, loserID int
 	var winVal, loseVal int
@@ -350,7 +351,7 @@ func (s *Store) ResolveMatch(nc *nats.Conn, gameId string) {
 		winVal, loseVal = game.Card2, game.Card1
 	} else {
 		fmt.Println("Empate! Ninguém ganha.")
-		return
+		return Player{}, 0, Player{}, 0, "", fmt.Errorf("unexpected draw")
 	}
 
 	pWin := s.players[winnerID]
@@ -358,7 +359,14 @@ func (s *Store) ResolveMatch(nc *nats.Conn, gameId string) {
 
 	fmt.Printf("🏆 Vencedor: Player %d (Carta %d)\n", winnerID, winVal)
 
-	go func() {
-		RequestLogMatch(nc, pWin.Wallet.Address, pLose.Wallet.Address, winVal, loseVal)
-	}()
+	digest, objectId, err := RequestLogMatch(nc, pWin.Wallet.Address, pLose.Wallet.Address, winVal, loseVal)
+	if err != nil {
+		log.Println("❌ Falha no log:", err)
+	} else {
+		fmt.Printf("✅ Log criado! ID: %s (Digest: %s)\n", objectId, digest)
+		if objectId != "" {
+			return pWin, winVal, pLose, loseVal, objectId, nil
+		}
+	}
+	return Player{}, 0, Player{}, 0, "", nil
 }

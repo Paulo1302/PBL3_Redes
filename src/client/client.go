@@ -46,9 +46,10 @@ func userMenu(nc *nats.Conn) {
 	id := 0
 	cardChan := make(chan int)
 	gameResult := make(chan string)
+	logObj := make(chan string)
 	
 	// Inicia o listener de eventos do jogo
-	API.ManageGame2(nc, &id, cardChan, gameResult)
+	API.ManageGame2(nc, &id, cardChan, gameResult, logObj)
 	
 	reader := bufio.NewReader(os.Stdin)
 
@@ -59,7 +60,7 @@ func userMenu(nc *nats.Conn) {
 		if id != 0 {
 			// Fase 2: Menu Principal (Logado)
 			sub := API.LoggedIn(nc, id) // Avisa ao servidor que este cliente está ativo
-			menuPrincipal(nc, id, reader, cardChan, gameResult)
+			menuPrincipal(nc, id, reader, cardChan, gameResult, logObj)
 			sub.Unsubscribe()
 		}
 	}
@@ -115,7 +116,7 @@ func menuInicial(nc *nats.Conn, reader *bufio.Reader) int {
 	}
 }
 
-func menuPrincipal(nc *nats.Conn, id int, reader *bufio.Reader, cardChan chan int, roundResult chan string) {
+func menuPrincipal(nc *nats.Conn, id int, reader *bufio.Reader, cardChan chan int, roundResult chan string, obj chan string) {
 	var cards []API.CardDisplay 
 	var err error
 
@@ -195,7 +196,7 @@ func menuPrincipal(nc *nats.Conn, id int, reader *bufio.Reader, cardChan chan in
 			if err != nil {
 				fmt.Println("❌ Erro no matchmaking:", err)
 			} else {
-				menuJogo(nc, id, cards, reader, cardChan, roundResult, game)
+				menuJogo(nc, id, cards, reader, cardChan, roundResult, obj, game)
 			}
 
 		case "5":
@@ -221,7 +222,7 @@ func menuPrincipal(nc *nats.Conn, id int, reader *bufio.Reader, cardChan chan in
 	}
 }
 
-func menuJogo(nc *nats.Conn, id int, cards []API.CardDisplay, reader *bufio.Reader, cardChan chan int, gameResult chan string, game string) {
+func menuJogo(nc *nats.Conn, id int, cards []API.CardDisplay, reader *bufio.Reader, cardChan chan int, gameResult chan string, logObj chan string, game string) {
 	fmt.Println("\n⚔️ PARTIDA ENCONTRADA! ⚔️")
 	fmt.Print("Suas cartas (Força): ")
 	for _, c := range cards {
@@ -259,6 +260,7 @@ func menuJogo(nc *nats.Conn, id int, cards []API.CardDisplay, reader *bufio.Read
 
 	opCard := <-cardChan
 	result := <-gameResult
+	matchObj := <-logObj
 
 	fmt.Printf("\nOponente jogou força: %d\n", opCard)
 	
@@ -272,4 +274,5 @@ func menuJogo(nc *nats.Conn, id int, cards []API.CardDisplay, reader *bufio.Read
 	default:
 		fmt.Println("⚠️ Erro na partida.")
 	}
+	fmt.Println("🆔 ID da partida:", matchObj)
 }

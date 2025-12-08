@@ -267,7 +267,7 @@ async function handleLogMatch(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
             adminQueue = adminQueue.then(async () => {
                 const req = jc.decode(msg.data) as any;
                 try {
-                    await executeWithRetry(client, adminKey, () => {
+                    const res = await executeWithRetry(client, adminKey, () => {
                         const tx = new Transaction();
                         tx.moveCall({
                             target: `${PACKAGE_ID}::core::log_match`,
@@ -276,8 +276,15 @@ async function handleLogMatch(nc: nats.NatsConnection, jc: nats.Codec<unknown>, 
                         return tx;
                     }, "LogMatch");
 
+                    let createdId = "";
+                    if (res.objectChanges) {
+                        const created = res.objectChanges.find((o: any) => o.type === 'created');
+                        if (created) {
+                            createdId = (created as any).objectId;
+                        }
+                    }
                     console.log("   ✅ Match Logged.");
-                    msg.respond(jc.encode({ ok: true }));
+                    msg.respond(jc.encode({ ok: true, digest: res.digest, objectId: createdId }));
                 } catch (error) {
                     console.error("   ❌ Erro Log:", error);
                     msg.respond(jc.encode({ ok: false }));

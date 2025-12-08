@@ -135,7 +135,7 @@ func RequestMintCard(nc *nats.Conn, address string, value int) (string, string, 
 		return "", "", err
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(msg.Data, &resp)
 
 	if ok, _ := resp["ok"].(bool); ok {
@@ -148,7 +148,7 @@ func RequestMintCard(nc *nats.Conn, address string, value int) (string, string, 
 }
 
 // RequestLogMatch pede ao TS para registrar o resultado da partida on-chain
-func RequestLogMatch(nc *nats.Conn, winnerAddr, loserAddr string, valWin, valLose int) {
+func RequestLogMatch(nc *nats.Conn, winnerAddr, loserAddr string, valWin, valLose int) (string, string, error){
 	req := LogMatchReq{
 		Winner:  winnerAddr,
 		Loser:   loserAddr,
@@ -157,7 +157,21 @@ func RequestLogMatch(nc *nats.Conn, winnerAddr, loserAddr string, valWin, valLos
 	}
 	data, _ := json.Marshal(req)
 	// Request com timeout para garantir que o servidor recebeu, mesmo que não esperemos a confirmação final
-	nc.Request("internalServer.logMatch", data, 10*time.Second)
+	msg,err := nc.Request("internalServer.logMatch", data, 10*time.Second)
+	if err != nil {
+		return "", "", err
+	}
+
+	var resp map[string]any
+	json.Unmarshal(msg.Data, &resp)
+
+	if ok, _ := resp["ok"].(bool); ok {
+		digest := resp["digest"].(string)
+		// Recupera o ID do objeto retornado pelo TypeScript para vincular ao Player.Cards
+		objectId, _ := resp["objectId"].(string)
+		return digest, objectId, nil
+	}
+	return "", "", fmt.Errorf("erro no mint: %v", resp["error"])
 }
 
 // --- FUNÇÕES DE TRANSFERÊNCIA E TROCA ---
@@ -177,7 +191,7 @@ func RequestTransferCard(nc *nats.Conn, ownerSecret, cardObjectID, recipientAddr
 		return err
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(msg.Data, &resp)
 
 	if ok, _ := resp["ok"].(bool); !ok {
@@ -197,7 +211,7 @@ func RequestValidateOwnership(nc *nats.Conn, address, objectId string) bool {
 		return false
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(msg.Data, &resp)
 
 	if ok, exists := resp["ok"].(bool); exists {
@@ -224,7 +238,7 @@ func RequestAtomicSwap(nc *nats.Conn, userA Wallet, cardA string, userB Wallet, 
 		return err
 	}
 
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(msg.Data, &resp)
 
 	if ok, _ := resp["ok"].(bool); !ok {
