@@ -17,18 +17,18 @@ func SetupPS(s *Store) {
 		return
 	}
 
-	// --- CORREÇÃO CRÍTICA AQUI ---
+	// --- HEARTBEAT COM CORREÇÃO DE SLOW CONSUMER ---
 	go func() {
 		for {
 			htb := map[string]int64{"server_ping": time.Now().UnixMilli()}
 			htb_json, _ := json.Marshal(htb)
 			nc.Publish("topic.heartbeat", htb_json)
 			
-			// PAUSA DE 1 SEGUNDO (EVITA O ERRO SLOW CONSUMER)
+			// PAUSA DE 1 SEGUNDO (OBRIGATÓRIO PARA NÃO TRAVAR O CLIENTE)
 			time.Sleep(1 * time.Second) 
 		}
 	}()
-	// -----------------------------
+	// -----------------------------------------------
 
 	ReplyPing(nc)
 	CreateAccount(nc, s)
@@ -38,6 +38,9 @@ func SetupPS(s *Store) {
 	ClientJoinGameQueue(nc, s)
 	ClientPlayCards(nc, s)
 	ClientJoinBlindTrade(nc, s)
+	
+	// REGISTRO DA NOVA FUNÇÃO DE CREDENCIAIS
+	ClientGetCredentials(nc, s)
 }
 
 func ReplyPing(nc *nats.Conn) {
@@ -124,6 +127,7 @@ func ClientOpenPack(nc *nats.Conn, s *Store) {
 	})
 }
 
+// ClientSeeCards: Busca a verdade na Blockchain e atualiza o cache local
 func ClientSeeCards(nc *nats.Conn, s *Store) {
 	nc.Subscribe("topic.seeCards", func(m *nats.Msg) {
 		var payload map[string]any
@@ -140,6 +144,8 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 		}
 
 		fmt.Printf("🌐 Consultando cartas on-chain para Jogador %d (%s)...\n", clientID, player.Wallet.Address)
+		
+		// Chama a API que fala com o Indexer/Blockchain
 		chainCards, err := RequestGetCardsFromChain(nc, player.Wallet.Address)
 		
 		if err != nil {
@@ -148,6 +154,7 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 			return
 		}
 
+		// Atualiza o cache local para uso em batalhas/trocas
 		s.mu.Lock()
 		p, ok := s.players[clientID]
 		if ok {
@@ -160,6 +167,7 @@ func ClientSeeCards(nc *nats.Conn, s *Store) {
 		}
 		s.mu.Unlock()
 
+		// Responde ao cliente com a estrutura completa
 		resp := map[string]any{
 			"result":    chainCards, 
 			"is_leader": true,
@@ -264,5 +272,31 @@ func ClientJoinBlindTrade(nc *nats.Conn, s *Store) {
 		} else {
 			nc.Publish(m.Reply, []byte(`{"status":"queued", "msg":"Você está na fila. Aguarde notificação."}`))
 		}
+	})
+}
+
+// --- NOVO HANDLER: OBTER CREDENCIAIS ---
+func ClientGetCredentials(nc *nats.Conn, s *Store) {
+	nc.Subscribe("topic.getCredentials", func(m *nats.Msg) {
+		var payload map[string]any
+		json.Unmarshal(m.Data, &payload)
+		clientID := int(payload["client_id"].(float64))
+
+		s.mu.Lock()
+		player, exists := s.players[clientID]
+		s.mu.Unlock()
+
+		if !exists {
+			nc.Publish(m.Reply, []byte(`{"err":"player not found"}`))
+			return
+		}
+
+		// Retorna os dados da carteira (Address e Secret)
+		resp := map[string]string{
+			"address": player.Wallet.Address,
+			"secret":  player.Wallet.Secret,
+		}
+		data, _ := json.Marshal(resp)
+		nc.Publish(m.Reply, data)
 	})
 }
